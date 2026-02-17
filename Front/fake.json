@@ -1,0 +1,448 @@
+{
+  "version": "1.0",
+  "meta": {
+    "rtl": true,
+    "locale": "fa-IR",
+    "generatedAt": "2025-10-30T22:31:48.651664Z"
+  },
+  "initial": [
+    {
+      "id": "category",
+      "label": "چه چیزی می‌خواهید؟",
+      "type": "radio",
+      "required": true,
+      "options": [
+        {
+          "value": "garment",
+          "label": "پوشاک"
+        },
+        {
+          "value": "fabric",
+          "label": "پارچه"
+        }
+      ]
+    }
+  ],
+  "flows": {
+    "fabric": [
+      {
+        "id": "gender",
+        "label": "جنسیت خود را انتخاب کنید",
+        "type": "radio",
+        "required": true,
+        "options": [
+          {
+            "value": "male",
+            "label": "مرد"
+          },
+          {
+            "value": "female",
+            "label": "زن"
+          }
+        ]
+      },
+      {
+        "id": "fabricType",
+        "label": "جنس پارچه خود را انتخاب کنید",
+        "type": "select",
+        "required": true,
+        "options": [
+          {
+            "value": "",
+            "label": "انتخاب کنید…"
+          },
+          {
+            "value": "cotton",
+            "label": "پنبه‌ای"
+          },
+          {
+            "value": "linen",
+            "label": "کتان"
+          },
+          {
+            "value": "silk",
+            "label": "ابریشم"
+          },
+          {
+            "value": "wool",
+            "label": "پشمی"
+          },
+          {
+            "value": "polyester",
+            "label": "پلی‌استر"
+          },
+          {
+            "value": "nylon",
+            "label": "نایلون"
+          },
+          {
+            "value": "acrylic",
+            "label": "اکریلیک"
+          },
+          {
+            "value": "viscose",
+            "label": "ویسکوز"
+          },
+          {
+            "value": "velvet",
+            "label": "مخمل"
+          },
+          {
+            "value": "tulle",
+            "label": "تور"
+          },
+          {
+            "value": "satin",
+            "label": "ساتن"
+          },
+          {
+            "value": "chiffon",
+            "label": "شیفون"
+          }
+        ]
+      },
+      {
+        "id": "colors",
+        "label": "رنگ‌های مورد علاقه خود را انتخاب کنید",
+        "type": "checkbox",
+        "required": true,
+        "options": [
+          {
+            "value": "black",
+            "label": "سیاه"
+          },
+          {
+            "value": "white",
+            "label": "سفید"
+          },
+          {
+            "value": "red",
+            "label": "قرمز"
+          },
+          {
+            "value": "blue",
+            "label": "آبی"
+          },
+          {
+            "value": "green",
+            "label": "سبز"
+          },
+          {
+            "value": "yellow",
+            "label": "زرد"
+          }
+        ]
+      },
+      {
+        "id": "pattern",
+        "label": "طرح پارچه مورد نظر را انتخاب کنید",
+        "type": "radio",
+        "required": true,
+        "options": [
+          {
+            "value": "plain",
+            "label": "ساده"
+          },
+          {
+            "value": "printed",
+            "label": "چاپی"
+          },
+          {
+            "value": "striped",
+            "label": "راه‌راه"
+          },
+          {
+            "value": "plaid",
+            "label": "چهارخانه"
+          },
+          {
+            "value": "floral",
+            "label": "گلدار"
+          },
+          {
+            "value": "polka",
+            "label": "نقطه‌ای"
+          },
+          {
+            "value": "fancy",
+            "label": "فانتزی"
+          }
+        ]
+      },
+      {
+        "id": "usage",
+        "label": "کاربرد پارچه را انتخاب کنید (می‌توانید چند مورد انتخاب کنید)",
+        "type": "checkbox",
+        "required": true,
+        "options": [
+          {
+            "value": "tshirt",
+            "label": "تی‌شرت"
+          },
+          {
+            "value": "shirt",
+            "label": "پیراهن"
+          },
+          {
+            "value": "manto",
+            "label": "مانتو"
+          },
+          {
+            "value": "underwear",
+            "label": "لباس زیر"
+          },
+          {
+            "value": "pants",
+            "label": "شلوار"
+          },
+          {
+            "value": "coat",
+            "label": "کت"
+          },
+          {
+            "value": "blouse",
+            "label": "بلوز"
+          },
+          {
+            "value": "skirt",
+            "label": "دامن"
+          },
+          {
+            "value": "tunic",
+            "label": "تونیک"
+          },
+          {
+            "value": "top",
+            "label": "تاپ"
+          }
+        ]
+      },
+      {
+        "id": "occasion",
+        "label": "برای چه مناسبتی پارچه را می‌خواهید",
+        "type": "checkbox",
+        "required": true,
+        "options": [
+          {
+            "value": "ceremony",
+            "label": "مجلسی"
+          },
+          {
+            "value": "luxury",
+            "label": "لوکس"
+          },
+          {
+            "value": "formal",
+            "label": "رسمی"
+          },
+          {
+            "value": "special",
+            "label": "خاص"
+          },
+          {
+            "value": "cold",
+            "label": "مناسب فصل سرد"
+          },
+          {
+            "value": "warm",
+            "label": "مناسب فصل گرم"
+          },
+          {
+            "value": "party",
+            "label": "مهمانی"
+          },
+          {
+            "value": "daily",
+            "label": "فعالیت روزانه"
+          }
+        ]
+      },
+      {
+        "id": "season",
+        "label": "فصل مورد نظر برای استفاده از پارچه",
+        "type": "radio",
+        "required": true,
+        "options": [
+          {
+            "value": "spring",
+            "label": "بهار"
+          },
+          {
+            "value": "summer",
+            "label": "تابستان"
+          },
+          {
+            "value": "autumn",
+            "label": "پاییز"
+          },
+          {
+            "value": "winter",
+            "label": "زمستان"
+          }
+        ]
+      },
+      {
+        "id": "weave",
+        "label": "ویژگی‌های بافت پارچه",
+        "type": "checkbox",
+        "required": true,
+        "options": [
+          {
+            "value": "soft",
+            "label": "نرم"
+          },
+          {
+            "value": "glossy",
+            "label": "براق"
+          },
+          {
+            "value": "rough",
+            "label": "زبر"
+          },
+          {
+            "value": "delicate",
+            "label": "لطیف"
+          },
+          {
+            "value": "slippery",
+            "label": "لغزنده"
+          },
+          {
+            "value": "transparent",
+            "label": "شفاف"
+          }
+        ]
+      }
+    ],
+    "garment": [
+      {
+        "id": "gender",
+        "label": "جنسیت خود را انتخاب کنید",
+        "type": "radio",
+        "required": true,
+        "options": [
+          {
+            "value": "male",
+            "label": "مرد"
+          },
+          {
+            "value": "female",
+            "label": "زن"
+          }
+        ]
+      },
+      {
+        "id": "garmentType",
+        "label": "نوع پوشاک مورد نظر را انتخاب کنید",
+        "type": "radio",
+        "required": true,
+        "options": [
+          {
+            "value": "tshirt",
+            "label": "تی‌شرت"
+          },
+          {
+            "value": "shirt",
+            "label": "پیراهن"
+          },
+          {
+            "value": "pants",
+            "label": "شلوار"
+          },
+          {
+            "value": "skirt",
+            "label": "دامن"
+          },
+          {
+            "value": "coat",
+            "label": "کت/مانتو"
+          }
+        ]
+      },
+      {
+        "id": "size",
+        "label": "سایز تقریبی خود را وارد کنید",
+        "type": "select",
+        "required": true,
+        "options": [
+          {
+            "value": "",
+            "label": "انتخاب کنید…"
+          },
+          {
+            "value": "xs",
+            "label": "XS"
+          },
+          {
+            "value": "s",
+            "label": "S"
+          },
+          {
+            "value": "m",
+            "label": "M"
+          },
+          {
+            "value": "l",
+            "label": "L"
+          },
+          {
+            "value": "xl",
+            "label": "XL"
+          }
+        ]
+      },
+      {
+        "id": "style",
+        "label": "استایل ترجیحی شما چیست؟",
+        "type": "checkbox",
+        "required": true,
+        "options": [
+          {
+            "value": "casual",
+            "label": "روزمره"
+          },
+          {
+            "value": "formal",
+            "label": "رسمی"
+          },
+          {
+            "value": "sport",
+            "label": "ورزشی"
+          },
+          {
+            "value": "classic",
+            "label": "کلاسیک"
+          },
+          {
+            "value": "minimal",
+            "label": "مینیمال"
+          }
+        ]
+      },
+      {
+        "id": "occasion",
+        "label": "برای چه مناسبتی پوشاک را می‌خواهید؟",
+        "type": "radio",
+        "required": true,
+        "options": [
+          {
+            "value": "work",
+            "label": "محیط کار"
+          },
+          {
+            "value": "party",
+            "label": "مهمانی/مجلسی"
+          },
+          {
+            "value": "daily",
+            "label": "استفاده روزانه"
+          },
+          {
+            "value": "outdoor",
+            "label": "فضای باز/سفر"
+          }
+        ]
+      }
+    ]
+  }
+}

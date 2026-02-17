@@ -1,0 +1,1508 @@
+{
+  "schema_version": "1.0.0",
+  "locale": "fa",
+  "taxonomy": {
+    "categories": [
+      {
+        "id": "tshirt",
+        "fa": "تی‌شرت",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "cotton",
+            "fa": "پنبه",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/black.png"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/image.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/grasslight-big.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/whits.png"
+              }
+            ]
+          },
+          {
+            "id": "polyester",
+            "fa": "پلی‌استر",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "linen",
+            "fa": "کتان",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "hoodie",
+        "fa": "هودی",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "cotton",
+            "fa": "پنبه",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "wool",
+            "fa": "پشم",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "polyester",
+            "fa": "پلی‌استر",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "shirt",
+        "fa": "پیراهن",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "cotton",
+            "fa": "پنبه",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/whits.png"
+              }
+            ]
+          },
+          {
+            "id": "linen",
+            "fa": "کتان",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/whits.png"
+              }
+            ]
+          },
+          {
+            "id": "silk",
+            "fa": "ابریشم",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/whits.png"
+              }
+            ]
+          },
+          {
+            "id": "viscose",
+            "fa": "ویسکوز",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "scarf",
+        "fa": "شال",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "wool",
+            "fa": "پشم",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/whits.png"
+              }
+            ]
+          },
+          {
+            "id": "silk",
+            "fa": "ابریشم",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "viscose",
+            "fa": "ویسکوز",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "coat",
+        "fa": "کت",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "wool",
+            "fa": "پشم",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "polyester",
+            "fa": "پلی‌استر",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "cotton",
+            "fa": "پنبه",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "manteau",
+        "fa": "مانتو",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "wool",
+            "fa": "پشم",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "polyester",
+            "fa": "پلی‌استر",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "cotton",
+            "fa": "پنبه",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "viscose",
+            "fa": "ویسکوز",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/whits.png"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "pants",
+        "fa": "شلوار",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "denim",
+            "fa": "جین",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              }
+            ]
+          },
+          {
+            "id": "cotton",
+            "fa": "پنبه",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "polyester",
+            "fa": "پلی‌استر",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              }
+            ]
+          },
+          {
+            "id": "linen",
+            "fa": "کتان",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "skirt",
+        "fa": "دامن",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "linen",
+            "fa": "کتان",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "viscose",
+            "fa": "ویسکوز",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              }
+            ]
+          },
+          {
+            "id": "satin",
+            "fa": "ساتن",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "sweatshirt",
+        "fa": "سویشرت",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "cotton",
+            "fa": "پنبه",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              }
+            ]
+          },
+          {
+            "id": "polyester",
+            "fa": "پلی‌استر",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "cardigan",
+        "fa": "ژاکت",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "wool",
+            "fa": "پشم",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "cotton",
+            "fa": "پنبه",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "viscose",
+            "fa": "ویسکوز",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "overcoat",
+        "fa": "پالتو",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "wool",
+            "fa": "پشم",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "polyester",
+            "fa": "پلی‌استر",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "navy",
+                "fa": "سرمه‌ای",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "blouse",
+        "fa": "بلوز",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "viscose",
+            "fa": "ویسکوز",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              }
+            ]
+          },
+          {
+            "id": "silk",
+            "fa": "ابریشم",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "cotton",
+            "fa": "پنبه",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "satin",
+            "fa": "ساتن",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "top",
+        "fa": "تاپ",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "cotton",
+            "fa": "پنبه",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "beige",
+                "fa": "بژ",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "viscose",
+            "fa": "ویسکوز",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              }
+            ]
+          },
+          {
+            "id": "polyester",
+            "fa": "پلی‌استر",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "gray",
+                "fa": "خاکستری",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "satin",
+            "fa": "ساتن",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "dress",
+        "fa": "پیراهن مجلسی",
+        "image": "./image/black.png",
+        "fabrics": [
+          {
+            "id": "silk",
+            "fa": "ابریشم",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "satin",
+            "fa": "ساتن",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "red",
+                "fa": "قرمز",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              }
+            ]
+          },
+          {
+            "id": "viscose",
+            "fa": "ویسکوز",
+            "image": "./image/black.png",
+            "colors": [
+              {
+                "id": "blue",
+                "fa": "آبی",
+                "image": "./image/whits.png"
+              },
+              {
+                "id": "green",
+                "fa": "سبز",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "black",
+                "fa": "مشکی",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "white",
+                "fa": "سفید",
+                "image": "./image/texture.jpg"
+              },
+              {
+                "id": "cream",
+                "fa": "کرم",
+                "image": "./image/whits.png"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "ai_recommendations": {
+    "recommendations": [
+      {
+        "title_fa": "پیشنهاد یک",
+        "category": { "id": "tshirt", "fa": "هودی" },
+        "fabric": { "id": "cotton", "fa": "پنبه" },
+        "color": { "id": "blue", "fa": "آبی" , "image": "./image/whits.png" },
+        "text_fa": "تیشرت با پارچهٔ پنبه و رنگ آبی"
+      },
+      {
+        "title_fa": "پیشنهاد یک",
+        "category": { "id": "tshirt", "fa": "تیشرت" },
+        "fabric": { "id": "cotton", "fa": "پنبه" },
+        "color": { "id": "blue", "fa": "آبی" , "image": "./image/whits.png" },
+        "text_fa": "تیشرت با پارچهٔ پنبه و رنگ آبی"
+      },
+      {
+        "title_fa": "پیشنهاد یک",
+        "category": { "id": "tshirt", "fa": "شال" },
+        "fabric": { "id": "cotton", "fa": "پنبه" },
+        "color": { "id": "blue", "fa": "آبی" , "image": "./image/whits.png" },
+        "text_fa": "تیشرت با پارچهٔ پنبه و رنگ آبی"
+      },
+      {
+        "title_fa": "پیشنهاد دو",
+        "category": { "id": "tshirt", "fa": "تیشرت" },
+        "fabric": { "id": "linen", "fa": "کتان" },
+        "color": { "id": "white", "fa": "سفید" , "image": "./image/black.png" },
+        "text_fa": "تیشرت با پارچهٔ کتان و رنگ سفید"
+      }
+    ]
+  }
+}

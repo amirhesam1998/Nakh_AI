@@ -1,0 +1,18 @@
+2025-10-12 10:35:26.825 | INFO     | __main__:main:102 - Demo options: 
+ Namespace(cfg='data/pare/checkpoints/pare_w_3dpw_config.yaml', ckpt='data/pare/checkpoints/pare_w_3dpw_checkpoint.ckpt', exp='', mode='video', vid_file='..\\src\\enhanced_image\\mohandes\\img_triplet.mp4', image_folder=None, output_folder='..\\src\\pre\\', tracking_method='bbox', detector='yolo', yolo_img_size=416, tracker_batch_size=12, staf_dir='/home/mkocabas/developments/openposetrack', batch_size=16, display=False, smooth=False, min_cutoff=0.004, beta=1.0, no_render=True, no_save=False, wireframe=False, sideview=False, draw_keypoints=False, save_obj=False, smplify=False)
+2025-10-12 10:35:26.987 | INFO     | pare.models.backbone.hrnet:init_weights:530 - => init weights from normal distribution
+2025-10-12 10:35:27.099 | WARNING  | pare.models.backbone.hrnet:init_weights:558 - IMPORTANT WARNING!! Please download pre-trained models if you are in TRAINING mode!
+2025-10-12 10:35:27.100 | INFO     | pare.models.head.pare_head:__init__:125 - "Keypoint Attention" should be activated to be able to use part segmentation
+2025-10-12 10:35:27.101 | INFO     | pare.models.head.pare_head:__init__:126 - Overriding use_keypoint_attention
+2025-10-12 10:35:27.108 | INFO     | pare.models.head.pare_head:__init__:327 - Keypoint attention is active
+2025-10-12 10:35:27.296 | INFO     | pare.core.tester:_load_pretrained_model:117 - Loading pretrained model from data/pare/checkpoints/pare_w_3dpw_checkpoint.ckpt
+2025-10-12 10:35:27.826 | WARNING  | pare.utils.train_utils:load_pretrained_model:45 - Removing "model." keyword from state_dict keys..
+2025-10-12 10:35:27.870 | INFO     | pare.core.tester:_load_pretrained_model:120 - Loaded pretrained weights from "data/pare/checkpoints/pare_w_3dpw_checkpoint.ckpt"
+2025-10-12 10:35:27.875 | INFO     | __main__:main:111 - Input video number of frames 3
+2025-10-12 10:35:29.347 | INFO     | pare.core.tester:run_on_video:362 - Running PARE on each tracklet...
+2025-10-12 10:35:37.098 | INFO     | pare.core.tester:run_on_video:437 - Converting smpl keypoints 2d to original image coordinate
+2025-10-12 10:35:37.101 | INFO     | __main__:main:121 - PARE FPS: 0.39
+2025-10-12 10:35:37.102 | INFO     | __main__:main:123 - Total time spent: 9.23 seconds.
+2025-10-12 10:35:37.102 | INFO     | __main__:main:124 - Total FPS (including model loading): 0.33.
+2025-10-12 10:35:37.103 | INFO     | __main__:main:128 - Saved output results to "..\src\pre\img_triplet_\pare_output.pkl"
+2025-10-12 10:35:37.104 | INFO     | __main__:main:194 - ================= END =================

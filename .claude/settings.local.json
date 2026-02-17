@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uvicorn:*)",
+      "Bash(curl:*)",
+      "Bash(python -c:*)",
+      "Bash(powershell.exe -Command:*)",
+      "Bash(ss:*)"
+    ]
+  }
+}

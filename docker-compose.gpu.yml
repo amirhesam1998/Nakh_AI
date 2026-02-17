@@ -1,0 +1,21 @@
+version: '3.8'
+
+# GPU-enabled docker-compose configuration
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up
+
+services:
+  # Celery Worker with GPU support
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility

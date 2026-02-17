@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>پرسشنامه</title>
+    <link rel="stylesheet" href="css/mainlog.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0"
+    />
+    <link rel="stylesheet" href="fonts/remixicon.css" />
+  </head>
+  <body>
+    <div class="container">
+      <img src="image/blob.svg" class="blob" alt="background" />
+      <div class="orbit"></div>
+
+      <div class="Questions-form">
+        <div class="h-tag-top">
+          <h2>پرسشنامه</h2>
+          <h3 id="stepLabel">مرحله 1 از 1</h3>
+        </div>
+
+        <!-- Progress Bar -->
+        <div class="progress-container">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+
+        <!-- Question Container -->
+        <div id="questionContainer" class="question-container"></div>
+
+        <!-- Error Message -->
+        <div id="errorMessage" class="error-message" style="display: none;"></div>
+
+        <!-- Navigation Buttons -->
+        <div class="navigation-buttons">
+          <button type="button" id="backBtn" class="btn-secondary" disabled>
+            <i class="ri-arrow-right-line"></i> قبلی
+          </button>
+          <button type="button" id="nextBtn" class="btn-primary">
+            بعدی <i class="ri-arrow-left-line"></i>
+          </button>
+        </div>
+
+        <!-- Summary Section (hidden initially) -->
+        <div id="summarySection" class="summary-section" style="display: none;">
+          <h3>خلاصه پاسخ‌های شما</h3>
+          <div id="answersList" class="answers-list"></div>
+          
+          <div class="summary-actions">
+            <button type="button" id="editBtn" class="btn-secondary">
+              <i class="ri-edit-line"></i> ویرایش پاسخ‌ها
+            </button>
+            <button type="button" id="submitBtn" class="btn-primary">
+              <i class="ri-send-plane-fill"></i> ارسال به سرور
+            </button>
+          </div>
+          
+        </div>
+      </div>
+    </div>
+    <script src="./js/jQuery.js"></script>
+    <script src="./js/api-config.js"></script>
+    <script src="/js/questions.js"></script>
+  </body>
+</html>

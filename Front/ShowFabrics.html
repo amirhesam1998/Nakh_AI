@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+  <head>
+    <title>Show Fabrics</title>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0"
+    />
+    <link type="text/css" rel="stylesheet" href="./css/style.css" />
+    <!-- <link
+      rel="icon"
+      type="image/png"
+      href="./image/logo.png"
+    /> -->
+  </head>
+
+  <body>
+    <!-- Warning notice for user -->
+    <div class="warning-notice" id="warningNotice">
+      <div class="warning-content">
+        <span>پس از انتخاب گزینه‌های خود، حتماً روی دکمه "ثبت و ارسال"  کلیک کنید</span>
+      </div>
+    </div>
+
+    <!-- menu toggle button for when menu is hidden -->
+    <button class="menu-toggle-btn" id="menuToggleBtn" >
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="3" y1="12" x2="21" y2="12"></line>
+        <line x1="3" y1="6" x2="21" y2="6"></line>
+        <line x1="3" y1="18" x2="21" y2="18"></line>
+      </svg>
+    </button>
+
+    <div class="dynamic-menu" id="dynamicMenu" >
+      <!--close button to menu header -->
+      <div class="menu-header">
+        <button class="menu-close-btn" id="menuCloseBtn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div class="dynamic-menu-options-btn">
+        <button data-option="category">دسته بندی</button>
+        <button data-option="material">جنس</button>
+        <button data-option="color">رنگ</button>
+      </div>
+	  <div class="dynamic-menu-options-list" id="optionsList">
+        <div class="empty-state">یک گزینه را انتخاب کنید</div>
+	  </div>
+	  <div class="dynamic-menu-submit-btn">
+		<!-- <button id="displayBtn">نمایش</button> -->
+		<button id="saveSubmitBtn">ثبت و ارسال</button>
+		<button id="showAIsuggestion">پیشنهادات هوش مصنوعی</button>
+	  </div>
+    </div>
+
+    <!--AI Suggestions Modal -->
+    <div class="ai-modal" id="aiModal">
+      <div class="ai-modal-content">
+        <div class="ai-modal-header">
+          <h2>پیشنهادات هوش مصنوعی</h2>
+          <button class="ai-modal-close" id="aiModalClose">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="ai-modal-body" id="aiModalBody">
+          <!-- AI suggestions will be populated here -->
+        </div>
+      </div>
+    </div>
+  </body>
+  <script src="./js/api-config.js"></script>
+  <script type="module" src="./js/app.js"></script>
+</html>

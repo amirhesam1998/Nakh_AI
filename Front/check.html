@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>check page</title>
+    <link rel="stylesheet" href="/css/mainlog.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0"
+    />
+    <link rel="stylesheet" href="/fonts/remixicon.css" />
+  </head>
+  <body>
+    <div class="container">
+      <img src="image/blob.svg" class="blob" />
+      <div class="orbit"></div>
+
+      <div class="check-form">
+        <div class="h-tag-top">
+          <h2>صفحه چک نهایی</h2>
+        </div>
+
+        <!--  images grid section -->
+        <div class="check-images-grid">
+          <div class="check-image-item">
+            <img id="checkImage1" src="./image/image.jpg" alt="عکس جلو" />
+          </div>
+          <div class="check-image-item">
+            <img id="checkImage2" src="./image/image.jpg" alt="عکس پشت" />
+          </div>
+          <div class="check-image-item">
+            <img id="checkImage3" src="./image/image.jpg" alt="عکس کناری" />
+          </div>
+        </div>
+
+        <!--  parameters display section -->
+        <form class="check-parameters">
+          <div class="parameter-item">
+            <span class="parameter-label">قد (cm):</span>
+            <span class="parameter-value" id="param-height">0</span>
+          </div>
+          <div class="parameter-item">
+            <span class="parameter-label">وزن (kg):</span>
+            <span class="parameter-value" id="param-weight">0</span>
+          </div>
+          <div class="parameter-item">
+            <span class="parameter-label">دور سینه (cm):</span>
+            <span class="parameter-value" id="param-chest">0</span>
+          </div>
+          <div class="parameter-item">
+            <span class="parameter-label">دور کمر (cm):</span>
+            <span class="parameter-value" id="param-waist">0</span>
+          </div>
+          <div class="parameter-item">
+            <span class="parameter-label">دور باسن (cm):</span>
+            <span class="parameter-value" id="param-hips">0</span>
+          </div>
+          <div class="parameter-item">
+            <span class="parameter-label">دور بازو (cm):</span>
+            <span class="parameter-value" id="param-arm">0</span>
+          </div>
+          <div class="parameter-item">
+            <span class="parameter-label">دور ران (cm):</span>
+            <span class="parameter-value" id="param-thigh">0</span>
+          </div>
+          <div class="parameter-item">
+            <span class="parameter-label">دور ساق (cm):</span>
+            <span class="parameter-value" id="param-calf">0</span>
+          </div>
+          <div class="parameter-item">
+            <span class="parameter-label">دور گردن (cm):</span>
+            <span class="parameter-value" id="param-neck">0</span>
+          </div>
+          <div class="parameter-item">
+            <span class="parameter-label">طول دست (cm):</span>
+            <span class="parameter-value" id="param-arm-length">0</span>
+          </div>
+          <div class="parameter-item">
+            <span class="parameter-label">طول پا (cm):</span>
+            <span class="parameter-value" id="param-leg-length">0</span>
+          </div>
+        </form>
+
+        <!--  Save/Edit button -->
+        <button type="button" class="check-edit-btn" id="openEditModal">
+          <i class="ri-edit-line"></i>
+          ویرایش پارامترها
+        </button>
+      </div>
+    </div>
+
+    <!--  edit modal -->
+    <div class="edit-modal" id="editModal">
+      <div class="edit-modal-box">
+        <div class="modal-header">
+          <h3>ویرایش پارامترها</h3>
+          <button type="button" class="modal-close" id="closeModal">
+            <i class="ri-close-line"></i>
+          </button>
+        </div>
+        
+        <form id="editForm" class="modal-form">
+          <div class="modal-input-group">
+            <label for="edit-height">قد (cm)</label>
+            <input type="number" id="edit-height" name="height" required />
+          </div>
+          <div class="modal-input-group">
+            <label for="edit-weight">وزن (kg)</label>
+            <input type="number" id="edit-weight" name="weight" required />
+          </div>
+          <div class="modal-input-group">
+            <label for="edit-chest">دور سینه (cm)</label>
+            <input type="number" id="edit-chest" name="chest" required />
+          </div>
+          <div class="modal-input-group">
+            <label for="edit-waist">دور کمر (cm)</label>
+            <input type="number" id="edit-waist" name="waist" required />
+          </div>
+          <div class="modal-input-group">
+            <label for="edit-hips">دور باسن (cm)</label>
+            <input type="number" id="edit-hips" name="hips" required />
+          </div>
+          <div class="modal-input-group">
+            <label for="edit-arm">دور بازو (cm)</label>
+            <input type="number" id="edit-arm" name="arm" required />
+          </div>
+          <div class="modal-input-group">
+            <label for="edit-thigh">دور ران (cm)</label>
+            <input type="number" id="edit-thigh" name="thigh" required />
+          </div>
+          <div class="modal-input-group">
+            <label for="edit-calf">دور ساق (cm)</label>
+            <input type="number" id="edit-calf" name="calf" required />
+          </div>
+          <div class="modal-input-group">
+            <label for="edit-neck">دور گردن (cm)</label>
+            <input type="number" id="edit-neck" name="neck" required />
+          </div>
+          <div class="modal-input-group">
+            <label for="edit-arm-length">طول دست (cm)</label>
+            <input type="number" id="edit-arm-length" name="arm-length" required />
+          </div>
+          <div class="modal-input-group">
+            <label for="edit-leg-length">طول پا (cm)</label>
+            <input type="number" id="edit-leg-length" name="leg-length" required />
+          </div>
+
+          <div class="modal-actions">
+            <button type="submit" class="modal-save-btn">
+              <i class="ri-save-line"></i>
+              ذخیره تغییرات
+            </button>
+            <button type="button" class="modal-cancel-btn" id="cancelModal">
+              انصراف
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    
+     <script src="./js/jQuery.js"></script>
+    <script src="/js/nakh.js"></script>
+  </body>
+</html>
+
