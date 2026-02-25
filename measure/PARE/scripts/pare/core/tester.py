@@ -115,7 +115,8 @@ class PARETester:
     def _load_pretrained_model(self):
         # ========= Load pretrained weights ========= #
         logger.info(f'Loading pretrained model from {self.args.ckpt}')
-        ckpt = torch.load(self.args.ckpt)['state_dict']
+        map_loc = 'cuda' if torch.cuda.is_available() else 'cpu'
+        ckpt = torch.load(self.args.ckpt, map_location=map_loc, weights_only=False)['state_dict']
         load_pretrained_model(self.model, ckpt, overwrite_shape_mismatch=True, remove_lightning=True)
         logger.info(f'Loaded pretrained weights from \"{self.args.ckpt}\"')
 

@@ -427,23 +427,40 @@ class QuestionnaireSystem {
 
   // Handle submit button - using jQuery AJAX POST
   handleSubmit() {
+    // Read upload_id from URL query params
+    var urlParams = new URLSearchParams(window.location.search);
+    var uploadId = urlParams.get("upload_id");
+
     const jsonData = {
       completedAt: new Date().toISOString(),
       answers: this.answers,
     };
+    if (uploadId) {
+      jsonData.upload_id = uploadId;
+    }
+
+    // Auth header
+    var authHeaders = {};
+    var savedToken = localStorage.getItem("auth_token");
+    if (savedToken) {
+      authHeaders["Authorization"] = "Bearer " + savedToken;
+    }
 
     // Using jQuery AJAX for POST request
     $.ajax({
-      url: apiUrl("/api/submit-questionnaire"),
+      url: apiUrl("/uploads/questionnaire", "secondary"),
       method: "POST",
+      headers: authHeaders,
       contentType: "application/json",
       data: JSON.stringify(jsonData),
       dataType: "json",
     })
       .done((response) => {
-        alert("پاسخ‌های شما با موفقیت ارسال شد!");
         console.log("Submitted data:", jsonData);
         console.log("Server response:", response);
+        // Redirect to recommendations page
+        var recUploadId = (response && response.upload_id) || uploadId || "";
+        window.location.href = "recommendations.html?upload_id=" + encodeURIComponent(recUploadId);
       })
       .fail((xhr, status, error) => {
         console.error("Submit error:", status, error);

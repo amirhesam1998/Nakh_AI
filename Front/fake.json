@@ -32,12 +32,20 @@
         "required": true,
         "options": [
           {
-            "value": "male",
+            "value": "male1",
             "label": "مرد"
           },
           {
-            "value": "female",
+            "value": "female1",
             "label": "زن"
+          },
+          {
+            "value": "kids1",
+            "label": "کودکانه"
+          },
+          {
+            "value": "unisex1",
+            "label": "یونیسکس"
           }
         ]
       },

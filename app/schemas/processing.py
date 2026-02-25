@@ -40,6 +40,7 @@ class ProcessingResponse(BaseModel):
     width_scale: Optional[float] = None
     bmi: Optional[float] = None
     errors: List[str] = []
+    original_images: List[str] = []
 
 
 class ProcessingTriggerResponse(BaseModel):

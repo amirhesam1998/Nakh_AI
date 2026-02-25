@@ -9,6 +9,7 @@ from app.config import settings
 from .base import BaseLLMProvider, LLMResponse
 from .transformers_provider import TransformersProvider
 from .gguf_provider import GGUFProvider
+from .ollama_provider import OllamaProvider
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,14 @@ class LLMManager:
         logger.info(f"Initializing LLM: {model_path} (type: {model_type})")
 
         # Select provider based on model type
-        if model_type == "gguf" or model_path.endswith(".gguf"):
+        if model_type == "ollama":
+            self._provider = OllamaProvider(
+                model_path=model_path,
+                device=device,
+                ollama_base_url=kwargs.pop("ollama_base_url", "http://localhost:11434"),
+                **kwargs
+            )
+        elif model_type == "gguf" or model_path.endswith(".gguf"):
             self._provider = GGUFProvider(
                 model_path=model_path,
                 device=device,

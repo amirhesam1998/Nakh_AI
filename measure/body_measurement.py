@@ -233,6 +233,18 @@ class BodyMeasurement:
             cls._orth_slice_along_segment_robust(vertices, R_hp, R_kn)
         ]) * 100.0)
 
+        # Calf (midpoint between knee and ankle)
+        L_an, R_an = joints[mp["left_ankle"]], joints[mp["right_ankle"]]
+        res["calf_circum_cm"] = float(np.nanmean([
+            cls._orth_slice_along_segment_robust(vertices, L_kn, L_an),
+            cls._orth_slice_along_segment_robust(vertices, R_kn, R_an)
+        ]) * 100.0)
+
+        # Neck circumference (scan a narrow band just below the neck joint)
+        y_neck = float(joints[mp["neck"], 1])
+        scan_neck = cls._scan_perimeter_between(vertices, y_neck - 0.08, y_neck - 0.02, step=0.004)
+        res["neck_circum_cm"] = float(np.nanmin(scan_neck[:, 1]) * 100) if scan_neck.size else np.nan
+
         # Outseam
         y_hips_mean = cls._avg_y_mp(joints, mp, "left_hip", "right_hip")
         y_ground = cls._ground_y_from_ankles_or_mesh(joints, vertices, mp)
@@ -289,6 +301,8 @@ class BodyMeasurement:
             "hip_circum_cm": "دور باسن",
             "upperarm_circum_cm": "دور بازو",
             "thigh_circum_cm": "دور ران",
+            "calf_circum_cm": "دور ساق پا",
+            "neck_circum_cm": "دور گردن",
             "pants_outseam_cm": "قد بیرونی شلوار",
             "sleeve_len_cm": "قد آستین",
             "top_len_cm": "قد بالاتنه (بلوز)",

@@ -5,7 +5,30 @@
       "Bash(curl:*)",
       "Bash(python -c:*)",
       "Bash(powershell.exe -Command:*)",
-      "Bash(ss:*)"
+      "Bash(ss:*)",
+      "Bash(tail:*)",
+      "Bash(cd D:/Rivas/Nakh_AI && .venv/Scripts/pip show multi-person-tracker 2>&1)",
+      "Bash(cd D:/Rivas/Nakh_AI && .venv/Scripts/python -c \"from yolov3.yolo import YOLOv3; print\\('OK'\\)\" 2>&1)",
+      "Bash(cd D:/Rivas/Nakh_AI && .venv/Scripts/python -c \"import yolov3; print\\(yolov3.__file__\\)\" 2>&1)",
+      "Bash(.venv/Scripts/pip show:*)",
+      "Bash(cd D:/Rivas/Nakh_AI && .venv/Scripts/python -c \"import sys; print\\(sys.executable\\); print\\(sys.path\\)\" 2>&1)",
+      "Bash(\"D:/Rivas/Nakh_AI/.venv/Scripts/python.exe\":*)",
+      "Bash(\"D:/AI/Project/nakh-fastapi/.venv/Scripts/python.exe\":*)",
+      "Bash(\"D:/Rivas/Nakh_AI/.venv/Scripts/pip.exe\":*)",
+      "Bash(cat \"D:/Rivas/Nakh_AI/media/metadata/e88750cc9e0c4654915ad5fc3b12d4a1.json\" 2>/dev/null | \"D:/Rivas/Nakh_AI/.venv/Scripts/python.exe\" -m json.tool 2>&1)",
+      "Bash(cat \"D:/Rivas/Nakh_AI/media/metadata/bf2e170dd1984a44810b2f07425901fd.json\" | \"D:/Rivas/Nakh_AI/.venv/Scripts/python.exe\" -m json.tool 2>&1)",
+      "Bash(head:*)",
+      "Bash(cat \"D:/Rivas/Nakh_AI/media/metadata/07bbfc0a15924ad9bfef93c115d73787.json\" | \"D:/Rivas/Nakh_AI/.venv/Scripts/python.exe\" -m json.tool 2>&1)",
+      "Bash(ls:*)",
+      "Bash(cat \"D:/Rivas/Nakh_AI/media/metadata/0834a744750e4311aaa891ed12b1fc07.json\" | \"D:/Rivas/Nakh_AI/.venv/Scripts/python.exe\" -m json.tool 2>&1)",
+      "Bash(python3:*)",
+      "Bash(cat:*)",
+      "Bash(cat \"D:/Rivas/Nakh_AI/media/metadata/a8ba11baa42a4e84b360b3d26e0276b4.json\" | \"D:/Rivas/Nakh_AI/.venv/Scripts/python.exe\" -m json.tool 2>&1)",
+      "Bash(cat \"D:/Rivas/Nakh_AI/media/metadata/cc99b8b1fbec4b2d80a67d620d1e7844.json\" | \"D:/Rivas/Nakh_AI/.venv/Scripts/python.exe\" -m json.tool 2>&1)",
+      "Bash(cat \"D:/Rivas/Nakh_AI/media/metadata/308f5a0f599d414193e93f6d69df11f5.json\" | \"D:/Rivas/Nakh_AI/.venv/Scripts/python.exe\" -m json.tool 2>&1)",
+      "Bash(cat \"D:/Rivas/Nakh_AI/media/metadata/32850993d4d84994a31908d6e071e6d4.json\" | \"D:/Rivas/Nakh_AI/.venv/Scripts/python.exe\" -m json.tool 2>&1)",
+      "Bash(cat \"D:/Rivas/Nakh_AI/media/metadata/0ed112dafdaf493eb4d90c90af664231.json\" | \"D:/Rivas/Nakh_AI/.venv/Scripts/python.exe\" -m json.tool 2>&1)",
+      "Bash(cat \"D:/Rivas/Nakh_AI/media/metadata/046d0d1cc55f4d6a9640d959c7de4aea.json\" | \"D:/Rivas/Nakh_AI/.venv/Scripts/python.exe\" -m json.tool 2>&1)"
     ]
   }
 }

@@ -35,6 +35,8 @@ async def lifespan(app: FastAPI):
     (media_path / "processed").mkdir(exist_ok=True)
     (media_path / "videos").mkdir(exist_ok=True)
     (media_path / "body_models").mkdir(exist_ok=True)
+    (media_path / "chat" / "sessions").mkdir(parents=True, exist_ok=True)
+    (media_path / "chat" / "preferences").mkdir(parents=True, exist_ok=True)
 
     # Create logs directory
     logs_path = Path("logs")
@@ -52,6 +54,7 @@ async def lifespan(app: FastAPI):
                 device=settings.llm_device,
                 load_in_8bit=settings.llm_load_in_8bit,
                 load_in_4bit=settings.llm_load_in_4bit,
+                ollama_base_url=settings.ollama_base_url,
             )
             logger.info("LLM initialized successfully")
         except Exception as e:
@@ -74,7 +77,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Error shutting down LLM: {e}")
 
-    await close_redis()
+    try:
+        await close_redis()
+    except Exception as e:
+        logger.warning(f"Error closing Redis (may not be in use): {e}")
     logger.info("Application shutdown complete")
 
 

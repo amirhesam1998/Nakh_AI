@@ -7,14 +7,16 @@ Handles:
 - Context building
 - LLM interaction
 - Product recommendations
+
+Storage: JSON files under media/chat/ (no Redis required).
 """
 import json
 import logging
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
-from app.database import get_redis
 from app.config import settings
 from app.schemas.chat import (
     ChatMessage,
@@ -30,13 +32,60 @@ from app.services.product_service import product_service
 
 logger = logging.getLogger(__name__)
 
-# Redis key prefixes
-CHAT_SESSION_PREFIX = "chat_session:"
-CHAT_MESSAGES_PREFIX = "chat_messages:"
-USER_PREFERENCES_PREFIX = "user_preferences:"
-
-# Session TTL (7 days)
+# Session TTL (7 days) — not enforced at file level, but kept for reference
 SESSION_TTL = 7 * 24 * 60 * 60
+
+# ---------- JSON file helpers ----------
+
+_SESSIONS_DIR: Path = settings.media_path / "chat" / "sessions"
+_PREFS_DIR: Path = settings.media_path / "chat" / "preferences"
+
+
+def _ensure_dirs() -> None:
+    _SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    _PREFS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _session_path(session_id: str) -> Path:
+    return _SESSIONS_DIR / f"{session_id}.json"
+
+
+def _user_index_path(user_id: str) -> Path:
+    return _SESSIONS_DIR / f"user_{user_id}.json"
+
+
+def _prefs_path(user_id: str) -> Path:
+    return _PREFS_DIR / f"{user_id}.json"
+
+
+def _atomic_write(path: Path, data: dict) -> None:
+    """Write JSON atomically via .tmp + replace."""
+    _ensure_dirs()
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _read_json(path: Path) -> Optional[dict]:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _read_json_list(path: Path) -> list:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+# ------------------------------------------------------------------
 
 
 class ChatService:
@@ -47,23 +96,14 @@ class ChatService:
     def __init__(self):
         self.context_builder = ContextBuilder(language="fa")
 
+    # ---- Session management (JSON-backed) ----
+
     async def create_session(
         self,
         user_id: str,
         include_measurements: bool = True,
         preferred_language: str = "fa",
     ) -> ChatSessionResponse:
-        """
-        Create a new chat session.
-
-        Args:
-            user_id: The user ID
-            include_measurements: Whether to include measurements in context
-            preferred_language: Language preference (fa/en)
-
-        Returns:
-            ChatSessionResponse with session info
-        """
         session_id = str(uuid.uuid4())
         now = datetime.utcnow()
 
@@ -75,17 +115,15 @@ class ChatService:
             "include_measurements": include_measurements,
             "preferred_language": preferred_language,
             "message_count": 0,
+            "messages": [],
         }
 
-        redis = await get_redis()
-        await redis.setex(
-            f"{CHAT_SESSION_PREFIX}{session_id}",
-            SESSION_TTL,
-            json.dumps(session_data)
-        )
+        _atomic_write(_session_path(session_id), session_data)
 
-        # Add to user's sessions list
-        await redis.lpush(f"user_chat_sessions:{user_id}", session_id)
+        # Update user index
+        idx = _read_json_list(_user_index_path(user_id))
+        idx.insert(0, session_id)
+        _atomic_write(_user_index_path(user_id), idx)
 
         logger.info(f"Created chat session {session_id} for user {user_id}")
 
@@ -99,21 +137,16 @@ class ChatService:
         )
 
     async def get_session(self, session_id: str) -> Optional[ChatSessionResponse]:
-        """Get a chat session by ID."""
-        redis = await get_redis()
-        data = await redis.get(f"{CHAT_SESSION_PREFIX}{session_id}")
-
+        data = _read_json(_session_path(session_id))
         if not data:
             return None
-
-        session_data = json.loads(data)
         return ChatSessionResponse(
-            session_id=session_data["session_id"],
-            user_id=session_data["user_id"],
-            created_at=datetime.fromisoformat(session_data["created_at"]),
-            message_count=session_data["message_count"],
-            include_measurements=session_data["include_measurements"],
-            preferred_language=session_data["preferred_language"],
+            session_id=data["session_id"],
+            user_id=data["user_id"],
+            created_at=datetime.fromisoformat(data["created_at"]),
+            message_count=data.get("message_count", 0),
+            include_measurements=data.get("include_measurements", True),
+            preferred_language=data.get("preferred_language", "fa"),
         )
 
     async def get_or_create_session(
@@ -121,50 +154,37 @@ class ChatService:
         user_id: str,
         session_id: Optional[str] = None,
     ) -> ChatSessionResponse:
-        """
-        Get existing session or create a new one.
-
-        Args:
-            user_id: The user ID
-            session_id: Optional existing session ID
-
-        Returns:
-            ChatSessionResponse
-        """
         if session_id:
             session = await self.get_session(session_id)
             if session and session.user_id == user_id:
                 return session
 
-        # Get user's latest session or create new one
-        redis = await get_redis()
-        sessions = await redis.lrange(f"user_chat_sessions:{user_id}", 0, 0)
-
-        if sessions:
-            latest_session_id = sessions[0]
-            session = await self.get_session(latest_session_id)
+        idx = _read_json_list(_user_index_path(user_id))
+        for sid in idx:
+            session = await self.get_session(sid)
             if session:
                 return session
 
-        # Create new session
         return await self.create_session(user_id)
 
     async def delete_session(self, session_id: str, user_id: str) -> bool:
-        """Delete a chat session and its messages."""
-        redis = await get_redis()
-
-        # Verify ownership
         session = await self.get_session(session_id)
         if not session or session.user_id != user_id:
             return False
 
-        # Delete session and messages
-        await redis.delete(f"{CHAT_SESSION_PREFIX}{session_id}")
-        await redis.delete(f"{CHAT_MESSAGES_PREFIX}{session_id}")
-        await redis.lrem(f"user_chat_sessions:{user_id}", 0, session_id)
+        path = _session_path(session_id)
+        if path.exists():
+            path.unlink()
+
+        # Remove from user index
+        idx = _read_json_list(_user_index_path(user_id))
+        idx = [s for s in idx if s != session_id]
+        _atomic_write(_user_index_path(user_id), idx)
 
         logger.info(f"Deleted chat session {session_id}")
         return True
+
+    # ---- Messaging ----
 
     async def send_message(
         self,
@@ -174,99 +194,62 @@ class ChatService:
         measurements: Optional[dict] = None,
         preferences: Optional[UserPreferences] = None,
     ) -> tuple[ChatMessage, ChatMessage, list[ProductRecommendation]]:
-        """
-        Send a message and get a response.
-
-        Args:
-            user_id: The user ID
-            message: The user's message
-            session_id: Optional session ID
-            measurements: User's body measurements
-            preferences: User's preferences
-
-        Returns:
-            Tuple of (user_message, assistant_message, recommendations)
-        """
-        # Get or create session
         session = await self.get_or_create_session(user_id, session_id)
 
-        # Update context builder language
         self.context_builder.language = session.preferred_language
 
-        # Create user message
         user_msg = ChatMessage(
             role=MessageRole.USER,
             content=message,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
         )
-
-        # Store user message
         await self._store_message(session.session_id, user_msg)
 
-        # Get chat history
         history = await self._get_messages(session.session_id, limit=10)
 
-        # Build system prompt with context
         system_prompt = self.context_builder.build_system_prompt(
             measurements=measurements if session.include_measurements else None,
             preferences=preferences,
-            include_product_context=True
+            include_product_context=True,
         )
-
-        # Format messages for LLM
         chat_messages = self.context_builder.format_chat_history(history)
 
-        # Generate response
         assistant_text = await self._generate_response(
-            chat_messages,
-            system_prompt,
-            session.preferred_language
+            chat_messages, system_prompt, session.preferred_language
         )
 
-        # Create assistant message
         assistant_msg = ChatMessage(
             role=MessageRole.ASSISTANT,
             content=assistant_text,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
         )
-
-        # Store assistant message
         await self._store_message(session.session_id, assistant_msg)
-
-        # Update session
         await self._update_session_count(session.session_id)
 
-        # Check if we should recommend products
         recommendations = []
         if self._should_recommend_products(message, assistant_text):
             recommendations = await product_service.get_recommendations(
                 measurements=measurements,
                 preferences=preferences,
                 conversation_context=f"{message}\n{assistant_text}",
-                limit=3
+                limit=3,
             )
 
         return user_msg, assistant_msg, recommendations
 
     async def _generate_response(
-        self,
-        messages: list[dict],
-        system_prompt: str,
-        language: str
+        self, messages: list[dict], system_prompt: str, language: str
     ) -> str:
-        """Generate a response from the LLM."""
         if not llm_manager.is_ready:
-            # Fallback response when LLM is not available
             if language == "fa":
                 return (
                     "متأسفانه در حال حاضر امکان پردازش پیام شما وجود ندارد. "
                     "لطفاً کمی صبر کنید یا دوباره تلاش کنید."
                 )
-            else:
-                return (
-                    "Sorry, I'm unable to process your message at the moment. "
-                    "Please wait a moment or try again."
-                )
+            return (
+                "Sorry, I'm unable to process your message at the moment. "
+                "Please wait a moment or try again."
+            )
 
         try:
             response = llm_manager.chat(
@@ -276,169 +259,106 @@ class ChatService:
                 temperature=0.7,
             )
             return response.text
-
         except Exception as e:
             logger.error(f"LLM generation error: {e}")
             if language == "fa":
                 return "متأسفم، مشکلی در پردازش پیام شما پیش آمد. لطفاً دوباره تلاش کنید."
-            else:
-                return "Sorry, there was an error processing your message. Please try again."
+            return "Sorry, there was an error processing your message. Please try again."
 
     def _should_recommend_products(self, user_message: str, assistant_response: str) -> bool:
-        """
-        Determine if we should include product recommendations.
-
-        Checks for keywords indicating product interest.
-        """
         keywords_fa = [
             "پیشنهاد", "محصول", "خرید", "لباس", "پارچه",
             "کت", "شلوار", "پیراهن", "چه بخرم", "چی بپوشم",
-            "سفارش", "قیمت", "فروشگاه"
+            "سفارش", "قیمت", "فروشگاه",
         ]
         keywords_en = [
             "recommend", "product", "buy", "clothes", "fabric",
             "jacket", "pants", "shirt", "what to wear", "order",
-            "price", "shop", "suggest"
+            "price", "shop", "suggest",
         ]
+        combined = f"{user_message} {assistant_response}".lower()
+        return any(kw in combined for kw in keywords_fa + keywords_en)
 
-        combined_text = f"{user_message} {assistant_response}".lower()
-
-        for keyword in keywords_fa + keywords_en:
-            if keyword in combined_text:
-                return True
-
-        return False
+    # ---- JSON-backed message storage ----
 
     async def _store_message(self, session_id: str, message: ChatMessage) -> None:
-        """Store a message in Redis."""
-        redis = await get_redis()
-        message_data = {
+        path = _session_path(session_id)
+        data = _read_json(path) or {}
+        messages = data.get("messages", [])
+        messages.append({
             "role": message.role.value,
             "content": message.content,
-            "timestamp": message.timestamp.isoformat()
-        }
-        await redis.rpush(
-            f"{CHAT_MESSAGES_PREFIX}{session_id}",
-            json.dumps(message_data, ensure_ascii=False)
-        )
-        # Set TTL on messages
-        await redis.expire(f"{CHAT_MESSAGES_PREFIX}{session_id}", SESSION_TTL)
+            "timestamp": message.timestamp.isoformat(),
+        })
+        data["messages"] = messages
+        _atomic_write(path, data)
 
-    async def _get_messages(
-        self,
-        session_id: str,
-        limit: int = 50
-    ) -> list[ChatMessage]:
-        """Get messages from a session."""
-        redis = await get_redis()
-        messages_data = await redis.lrange(
-            f"{CHAT_MESSAGES_PREFIX}{session_id}",
-            -limit, -1
-        )
-
-        messages = []
-        for data in messages_data:
-            msg_dict = json.loads(data)
-            messages.append(ChatMessage(
-                role=MessageRole(msg_dict["role"]),
-                content=msg_dict["content"],
-                timestamp=datetime.fromisoformat(msg_dict["timestamp"])
-            ))
-
-        return messages
+    async def _get_messages(self, session_id: str, limit: int = 50) -> list[ChatMessage]:
+        data = _read_json(_session_path(session_id))
+        if not data:
+            return []
+        raw = data.get("messages", [])[-limit:]
+        return [
+            ChatMessage(
+                role=MessageRole(m["role"]),
+                content=m["content"],
+                timestamp=datetime.fromisoformat(m["timestamp"]),
+            )
+            for m in raw
+        ]
 
     async def _update_session_count(self, session_id: str) -> None:
-        """Update the message count for a session."""
-        redis = await get_redis()
-        data = await redis.get(f"{CHAT_SESSION_PREFIX}{session_id}")
-
+        path = _session_path(session_id)
+        data = _read_json(path)
         if data:
-            session_data = json.loads(data)
-            session_data["message_count"] = session_data.get("message_count", 0) + 2
-            session_data["updated_at"] = datetime.utcnow().isoformat()
+            data["message_count"] = data.get("message_count", 0) + 2
+            data["updated_at"] = datetime.utcnow().isoformat()
+            _atomic_write(path, data)
 
-            await redis.setex(
-                f"{CHAT_SESSION_PREFIX}{session_id}",
-                SESSION_TTL,
-                json.dumps(session_data)
-            )
+    # ---- History ----
 
     async def get_chat_history(
-        self,
-        session_id: str,
-        user_id: str,
+        self, session_id: str, user_id: str
     ) -> Optional[ChatHistoryResponse]:
-        """
-        Get chat history for a session.
-
-        Args:
-            session_id: The session ID
-            user_id: The user ID (for verification)
-
-        Returns:
-            ChatHistoryResponse or None
-        """
         session = await self.get_session(session_id)
         if not session or session.user_id != user_id:
             return None
 
         messages = await self._get_messages(session_id, limit=100)
-
-        redis = await get_redis()
-        data = await redis.get(f"{CHAT_SESSION_PREFIX}{session_id}")
-        session_data = json.loads(data)
+        data = _read_json(_session_path(session_id)) or {}
 
         return ChatHistoryResponse(
             session_id=session_id,
             messages=messages,
-            created_at=datetime.fromisoformat(session_data["created_at"]),
-            updated_at=datetime.fromisoformat(session_data["updated_at"]),
+            created_at=datetime.fromisoformat(data.get("created_at", datetime.utcnow().isoformat())),
+            updated_at=datetime.fromisoformat(data.get("updated_at", datetime.utcnow().isoformat())),
         )
+
+    # ---- Preferences (JSON-backed) ----
 
     async def get_user_preferences(self, user_id: str) -> Optional[UserPreferences]:
-        """Get user preferences from storage."""
-        redis = await get_redis()
-        data = await redis.get(f"{USER_PREFERENCES_PREFIX}{user_id}")
-
+        data = _read_json(_prefs_path(user_id))
         if not data:
             return None
-
-        pref_data = json.loads(data)
-        return UserPreferences(**pref_data)
+        return UserPreferences(**data)
 
     async def update_user_preferences(
-        self,
-        user_id: str,
-        preferences: UserPreferences
+        self, user_id: str, preferences: UserPreferences
     ) -> UserPreferences:
-        """Update user preferences."""
-        redis = await get_redis()
-        await redis.set(
-            f"{USER_PREFERENCES_PREFIX}{user_id}",
-            json.dumps(preferences.model_dump(), ensure_ascii=False)
-        )
+        _atomic_write(_prefs_path(user_id), preferences.model_dump())
         return preferences
 
     async def clear_chat_history(self, session_id: str, user_id: str) -> bool:
-        """Clear chat history for a session."""
         session = await self.get_session(session_id)
         if not session or session.user_id != user_id:
             return False
 
-        redis = await get_redis()
-        await redis.delete(f"{CHAT_MESSAGES_PREFIX}{session_id}")
-
-        # Reset message count
-        data = await redis.get(f"{CHAT_SESSION_PREFIX}{session_id}")
+        path = _session_path(session_id)
+        data = _read_json(path)
         if data:
-            session_data = json.loads(data)
-            session_data["message_count"] = 0
-            await redis.setex(
-                f"{CHAT_SESSION_PREFIX}{session_id}",
-                SESSION_TTL,
-                json.dumps(session_data)
-            )
-
+            data["messages"] = []
+            data["message_count"] = 0
+            _atomic_write(path, data)
         return True
 
 

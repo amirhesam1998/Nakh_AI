@@ -1,17 +1,20 @@
 """
 Photo upload API endpoints.
+
+Upload metadata is stored as JSON files on disk (no Redis/database required).
 """
 import json
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile, status
 
 from app.config import settings
-from app.core.dependencies import CurrentUser, Storage
+from app.core.dependencies import CurrentUser
 from app.schemas import (
     PhotoUploadListResponse,
     PhotoUploadResponse,
@@ -21,6 +24,70 @@ from app.schemas.processing import ProcessingResponse, ProcessingStatus, Process
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Single-worker executor — PARE is GPU-heavy, serialized queue prevents OOM
+_processing_executor = ThreadPoolExecutor(max_workers=1)
+
+# Directory for upload metadata JSON files
+METADATA_DIR = settings.media_path / "metadata"
+
+
+def _ensure_metadata_dir() -> Path:
+    METADATA_DIR.mkdir(parents=True, exist_ok=True)
+    return METADATA_DIR
+
+
+def _save_metadata(upload_id: str, data: dict) -> None:
+    _ensure_metadata_dir()
+    target = METADATA_DIR / f"{upload_id}.json"
+    tmp = METADATA_DIR / f"{upload_id}.json.tmp"
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    tmp.replace(target)
+
+
+def _load_metadata(upload_id: str) -> Optional[dict]:
+    path = METADATA_DIR / f"{upload_id}.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _delete_metadata(upload_id: str) -> None:
+    path = METADATA_DIR / f"{upload_id}.json"
+    if path.exists():
+        path.unlink()
+
+
+def _list_user_metadata(user_id: str) -> List[dict]:
+    _ensure_metadata_dir()
+    uploads = []
+    for path in METADATA_DIR.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if str(data.get("user_id")) == str(user_id):
+                uploads.append(data)
+        except Exception:
+            continue
+    uploads.sort(key=lambda u: u.get("uploaded_at", ""), reverse=True)
+    return uploads
+
+
+def _run_processing_in_background(upload_id: str, height_cm: float, weight_kg: float, gender: str) -> None:
+    """Submit PARE processing to the background thread pool."""
+    from app.tasks.processing import _process_upload_pare_impl
+
+    class _MockTask:
+        def retry(self, *args, **kwargs):
+            raise kwargs.get("exc", Exception("Task retry"))
+
+    def _worker():
+        try:
+            _process_upload_pare_impl(_MockTask(), upload_id, height_cm, weight_kg, gender)
+        except Exception:
+            logger.exception(f"Background processing failed for upload {upload_id}")
+
+    _processing_executor.submit(_worker)
+    logger.info(f"Submitted background processing for upload {upload_id}")
 
 
 def _upload_to_response(upload: dict) -> PhotoUploadResponse:
@@ -35,7 +102,7 @@ def _upload_to_response(upload: dict) -> PhotoUploadResponse:
 
     return PhotoUploadResponse(
         id=upload["id"],
-        user_id=upload.get("user_id"),
+        user_id=str(upload.get("user_id", "")),
         image1=upload["image1"],
         image2=upload.get("image2"),
         image3=upload.get("image3"),
@@ -75,7 +142,7 @@ def _validate_image(file: UploadFile) -> List[str]:
     return errors
 
 
-async def _save_upload(file: UploadFile, upload_dir: Path) -> str:
+async def _save_upload_file(file: UploadFile, upload_dir: Path) -> str:
     """Save an uploaded file and return the relative path."""
     upload_dir.mkdir(parents=True, exist_ok=True)
 
@@ -98,33 +165,21 @@ async def _save_upload(file: UploadFile, upload_dir: Path) -> str:
 )
 async def list_uploads(
     current_user: CurrentUser,
-    storage: Storage,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ) -> PhotoUploadListResponse:
-    """
-    List all uploads for the current user.
+    """List all uploads for the current user."""
+    all_uploads = _list_user_metadata(current_user["id"])
+    total = len(all_uploads)
 
-    Args:
-        current_user: Currently authenticated user
-        storage: Redis storage instance
-        page: Page number
-        size: Items per page
+    # Paginate
+    start = (page - 1) * size
+    page_uploads = all_uploads[start : start + size]
 
-    Returns:
-        Paginated list of uploads
-    """
-    uploads, total = await storage.get_user_uploads(
-        current_user["id"],
-        page=page,
-        size=size,
-    )
-
-    # Calculate pages
     pages = (total + size - 1) // size if total > 0 else 1
 
     return PhotoUploadListResponse(
-        items=[_upload_to_response(u) for u in uploads],
+        items=[_upload_to_response(u) for u in page_uploads],
         total=total,
         page=page,
         size=size,
@@ -140,7 +195,6 @@ async def list_uploads(
 )
 async def create_upload(
     current_user: CurrentUser,
-    storage: Storage,
     image1: UploadFile = File(..., description="Front view image (required)"),
     image2: Optional[UploadFile] = File(None, description="T-pose view image"),
     image3: Optional[UploadFile] = File(None, description="Side view image"),
@@ -148,25 +202,7 @@ async def create_upload(
     weight_kg: Optional[float] = Form(None, ge=20, le=250),
     gender: GenderEnum = Form(GenderEnum.MALE),
 ) -> PhotoUploadResponse:
-    """
-    Upload photos for body measurement.
-
-    Args:
-        current_user: Currently authenticated user
-        storage: Redis storage instance
-        image1: Front view image (required)
-        image2: T-pose view image (optional)
-        image3: Side view image (optional)
-        height_cm: User height in cm
-        weight_kg: User weight in kg
-        gender: User gender
-
-    Returns:
-        Created upload data
-
-    Raises:
-        HTTPException: If validation fails
-    """
+    """Upload photos for body measurement."""
     errors = []
 
     # Validate required image
@@ -187,31 +223,50 @@ async def create_upload(
     # Save uploaded files
     upload_dir = settings.media_path / "uploads"
 
-    image1_path = await _save_upload(image1, upload_dir)
+    image1_path = await _save_upload_file(image1, upload_dir)
     image2_path = None
     image3_path = None
 
     if image2 and image2.filename:
-        image2_path = await _save_upload(image2, upload_dir)
+        image2_path = await _save_upload_file(image2, upload_dir)
     if image3 and image3.filename:
-        image3_path = await _save_upload(image3, upload_dir)
+        image3_path = await _save_upload_file(image3, upload_dir)
 
-    # Create upload record in Redis
+    # Create upload record as JSON file on disk
     upload_id = uuid.uuid4().hex
-    upload = await storage.create_upload(
-        upload_id=upload_id,
-        user_id=current_user["id"],
-        image1=image1_path,
-        image2=image2_path,
-        image3=image3_path,
-        height_cm=height_cm,
-        weight_kg=weight_kg,
-        gender=gender.value,
-    )
+    upload_data = {
+        "id": upload_id,
+        "user_id": current_user["id"],
+        "image1": image1_path,
+        "image2": image2_path,
+        "image3": image3_path,
+        "height_cm": height_cm,
+        "weight_kg": weight_kg,
+        "gender": gender.value,
+        "uploaded_at": datetime.utcnow().isoformat(),
+        "processed_at": None,
+        "is_processed": False,
+        "processing_results": None,
+    }
 
-    logger.info(f"Upload created: id={upload['id']}, user={current_user['username']}")
+    # Auto-trigger processing if all 3 images are provided
+    if image1_path and image2_path and image3_path:
+        upload_data["processing_status"] = "processing"
 
-    return _upload_to_response(upload)
+    _save_metadata(upload_id, upload_data)
+
+    logger.info(f"Upload created: id={upload_id}, user={current_user['username']}")
+
+    # Kick off background PARE processing
+    if upload_data.get("processing_status") == "processing":
+        _run_processing_in_background(
+            upload_id,
+            height_cm or 175.0,
+            weight_kg or 80.0,
+            gender.value,
+        )
+
+    return _upload_to_response(upload_data)
 
 
 @router.get(
@@ -222,25 +277,11 @@ async def create_upload(
 async def get_upload(
     upload_id: str,
     current_user: CurrentUser,
-    storage: Storage,
 ) -> PhotoUploadResponse:
-    """
-    Get a specific upload by ID.
+    """Get a specific upload by ID."""
+    upload = _load_metadata(upload_id)
 
-    Args:
-        upload_id: Upload ID
-        current_user: Currently authenticated user
-        storage: Redis storage instance
-
-    Returns:
-        Upload data
-
-    Raises:
-        HTTPException: If upload not found or not owned by user
-    """
-    upload = await storage.get_upload(upload_id)
-
-    if not upload or upload.get("user_id") != current_user["id"]:
+    if not upload or str(upload.get("user_id")) != str(current_user["id"]):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Upload not found",
@@ -257,28 +298,17 @@ async def get_upload(
 async def delete_upload(
     upload_id: str,
     current_user: CurrentUser,
-    storage: Storage,
 ) -> None:
-    """
-    Delete an upload and its associated files.
+    """Delete an upload and its associated files."""
+    upload = _load_metadata(upload_id)
 
-    Args:
-        upload_id: Upload ID
-        current_user: Currently authenticated user
-        storage: Redis storage instance
-
-    Raises:
-        HTTPException: If upload not found or not owned by user
-    """
-    upload = await storage.get_upload(upload_id)
-
-    if not upload or upload.get("user_id") != current_user["id"]:
+    if not upload or str(upload.get("user_id")) != str(current_user["id"]):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Upload not found",
         )
 
-    # Delete files
+    # Delete image files
     media_root = settings.media_path
     for image_path in [upload.get("image1"), upload.get("image2"), upload.get("image3")]:
         if image_path:
@@ -286,8 +316,8 @@ async def delete_upload(
             if full_path.exists():
                 full_path.unlink()
 
-    # Delete from Redis
-    await storage.delete_upload(upload_id)
+    # Delete metadata
+    _delete_metadata(upload_id)
 
     logger.info(f"Upload deleted: id={upload_id}, user={current_user['username']}")
 
@@ -300,50 +330,32 @@ async def delete_upload(
 async def trigger_processing(
     upload_id: str,
     current_user: CurrentUser,
-    storage: Storage,
 ) -> ProcessingTriggerResponse:
-    """
-    Trigger PARE processing for an upload.
+    """Trigger PARE processing for an upload."""
+    upload = _load_metadata(upload_id)
 
-    Args:
-        upload_id: Upload ID
-        current_user: Currently authenticated user
-        storage: Redis storage instance
-
-    Returns:
-        Processing trigger response
-
-    Raises:
-        HTTPException: If upload not found or already processed
-    """
-    upload = await storage.get_upload(upload_id)
-
-    if not upload or upload.get("user_id") != current_user["id"]:
+    if not upload or str(upload.get("user_id")) != str(current_user["id"]):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Upload not found",
         )
 
-    # Check if already processed
     if upload.get("is_processed"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Upload already processed",
         )
 
-    # Check if minimum images are available
     if not all([upload.get("image1"), upload.get("image2"), upload.get("image3")]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="All three images (front, T-pose, side) are required for processing",
         )
 
-    # Default values if not provided
     height_cm = upload.get("height_cm") or 175.0
     weight_kg = upload.get("weight_kg") or 80.0
     gender = upload.get("gender") or "male"
 
-    # Trigger Celery task if enabled
     if settings.celery_enabled:
         from app.tasks.processing import process_upload_pare
 
@@ -357,19 +369,18 @@ async def trigger_processing(
             status=ProcessingStatus.PROCESSING,
         )
     else:
-        # Run synchronously if Celery is disabled
-        from app.services.processing_service import ProcessingService
+        # Mark as processing and kick off background thread
+        upload["processing_status"] = "processing"
+        _save_metadata(upload_id, upload)
 
-        service = ProcessingService()
-        await service.process_upload(storage, upload_id, height_cm, weight_kg, gender)
-
-        logger.info(f"Processing completed synchronously: upload_id={upload_id}")
+        _run_processing_in_background(upload_id, height_cm, weight_kg, gender)
+        logger.info(f"Processing started in background: upload_id={upload_id}")
 
         return ProcessingTriggerResponse(
-            message="Processing completed",
+            message="Processing started",
             upload_id=upload_id,
             task_id=None,
-            status=ProcessingStatus.COMPLETED,
+            status=ProcessingStatus.PROCESSING,
         )
 
 
@@ -381,28 +392,22 @@ async def trigger_processing(
 async def get_processing_results(
     upload_id: str,
     current_user: CurrentUser,
-    storage: Storage,
 ) -> ProcessingResponse:
-    """
-    Get processing results for an upload.
+    """Get processing results for an upload."""
+    upload = _load_metadata(upload_id)
 
-    Args:
-        upload_id: Upload ID
-        current_user: Currently authenticated user
-        storage: Redis storage instance
-
-    Returns:
-        Processing results
-
-    Raises:
-        HTTPException: If upload not found or not processed
-    """
-    upload = await storage.get_upload(upload_id)
-
-    if not upload or upload.get("user_id") != current_user["id"]:
+    if not upload or str(upload.get("user_id")) != str(current_user["id"]):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Upload not found",
+        )
+
+    processing_status = upload.get("processing_status")
+
+    if processing_status == "processing":
+        return ProcessingResponse(
+            upload_id=upload_id,
+            status=ProcessingStatus.PROCESSING,
         )
 
     if not upload.get("is_processed"):
@@ -411,13 +416,17 @@ async def get_processing_results(
             status=ProcessingStatus.PENDING,
         )
 
-    # Parse stored results
     processing_results = upload.get("processing_results")
     if processing_results:
         if isinstance(processing_results, str):
             results = json.loads(processing_results)
         else:
             results = processing_results
+
+        # Remove keys that conflict with explicit kwargs
+        results.pop("status", None)
+        results.pop("upload_id", None)
+
         return ProcessingResponse(
             upload_id=upload_id,
             status=ProcessingStatus.COMPLETED,
@@ -428,3 +437,49 @@ async def get_processing_results(
         upload_id=upload_id,
         status=ProcessingStatus.COMPLETED,
     )
+
+
+@router.post(
+    "/questionnaire",
+    summary="Save questionnaire answers",
+)
+async def save_questionnaire(
+    current_user: CurrentUser,
+    body: dict = Body(...),
+):
+    """
+    Save questionnaire answers into the upload's metadata JSON.
+
+    Body: { "completedAt": "...", "answers": {...}, "upload_id": "..." }
+    If upload_id is omitted the user's latest upload is used.
+    """
+    answers = body.get("answers", {})
+    completed_at = body.get("completedAt", datetime.utcnow().isoformat())
+    upload_id = body.get("upload_id")
+
+    if not upload_id:
+        # Find user's latest upload
+        uploads = _list_user_metadata(current_user["id"])
+        if not uploads:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No uploads found for this user",
+            )
+        upload_id = uploads[0]["id"]
+
+    upload = _load_metadata(upload_id)
+    if not upload or str(upload.get("user_id")) != str(current_user["id"]):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Upload not found",
+        )
+
+    upload["questionnaire"] = {
+        "completed_at": completed_at,
+        "answers": answers,
+    }
+    _save_metadata(upload_id, upload)
+
+    logger.info(f"Questionnaire saved for upload {upload_id}")
+
+    return {"message": "Questionnaire saved successfully", "upload_id": upload_id}

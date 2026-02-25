@@ -69,26 +69,61 @@ $form.on("submit", (e) => {
   const formEl = $form[0]
   const formData = formEl ? new FormData(formEl) : new FormData()
 
+  var authHeaders = {};
+  var savedToken = localStorage.getItem("auth_token");
+  if (savedToken) {
+    authHeaders["Authorization"] = "Bearer " + savedToken;
+  }
+
   $.ajax({
     url: API_UPLOAD_URL,
     method: "POST",
+    headers: authHeaders,
     data: formData,
     processData: false,
     contentType: false,
     timeout: 60000,
     success: function (response) {
-      const redirectUrl =
-        (response && (response.redirect || response.next_url || response.url)) ||
-        "check.html"
-      window.location.href = redirectUrl
+      var uploadId = response && response.id;
+      if (!uploadId) {
+        window.location.href = "check.html";
+        return;
+      }
+
+      // Update loading text
+      $loading.find(".loading-text").text("در حال پردازش هوش مصنوعی...");
+
+      // Poll until processing completes, then redirect
+      var resultsUrl = apiUrl("/uploads/" + uploadId + "/results", "secondary");
+      function waitForProcessing() {
+        $.ajax({
+          url: resultsUrl,
+          method: "GET",
+          headers: authHeaders,
+          success: function(data) {
+            if (data.status === "processing" || data.status === "pending") {
+              setTimeout(waitForProcessing, 3000);
+            } else {
+              // Processing done — redirect to check page
+              window.location.href = "check.html?upload_id=" + encodeURIComponent(uploadId);
+            }
+          },
+          error: function() {
+            // Retry on network errors
+            setTimeout(waitForProcessing, 3000);
+          }
+        });
+      }
+      waitForProcessing();
     },
     error: function (jqXHR, textStatus) {
       console.error("Upload error:", textStatus, jqXHR)
       alert("ارور در ارسال داده‌ها رخ داد. لطفاً دوباره تلاش کنید.")
-    },
-    complete: function () {
       $form.data("submitting", false)
       $loading.removeClass("show").css("display", "none")
+    },
+    complete: function () {
+      // Don't hide loading here — waitForProcessing handles the redirect
     },
   })
 
@@ -323,65 +358,157 @@ $form.on("submit", (e) => {
       // --- BEGIN original file (check.js) ---
 (($) => {
   $(() => {
-    // Mock backend data - Replace this with actual API call
-    const backendData = {
-      images: [
-        "./image/image.jpg?key=h67e0",
-        "./image/image.jpg?key=3mplr",
-        "./image/image.jpg?key=tcshg",
-      ],
-      parameters: {
-        height: 175,
-        weight: 70,
-        chest: 95,
-        waist: 80,
-        hips: 98,
-        arm: 32,
-        thigh: 55,
-        calf: 38,
-        neck: 38,
-        "arm-length": 60,
-        "leg-length": 95,
-      },
-    };
+    var apiUrl = window.apiUrl || function(path) { return path; };
 
-    // Load data from backend
-    function loadDataFromBackend() {
-      // In production, replace this with actual API call:
-      // $.ajax({
-      //   url: '/api/check-data',
-      //   method: 'GET',
-      //   success: function(data) {
-      //     displayImages(data.images);
-      //     displayParameters(data.parameters);
-      //   }
-      // });
+    // Read upload_id from URL query params
+    var urlParams = new URLSearchParams(window.location.search);
+    var uploadId = urlParams.get("upload_id");
+    var pollTimer = null;
 
-      // For now, use mock data
-      displayImages(backendData.images);
-      displayParameters(backendData.parameters);
-    }
+    // Build media URL from the secondary API base (e.g. http://localhost:8001)
+    var mediaBase = (window.API_CONFIG && window.API_CONFIG.BASE_URL_SECONDARY || "").replace(/\/api\/v1\/?$/, "");
 
     // Display images
     function displayImages(images) {
-      $("#checkImage1").attr("src", images[0]);
-      $("#checkImage2").attr("src", images[1]);
-      $("#checkImage3").attr("src", images[2]);
+      if (images[0]) $("#checkImage1").attr("src", mediaBase + images[0]);
+      if (images[1]) $("#checkImage2").attr("src", mediaBase + images[1]);
+      if (images[2]) $("#checkImage3").attr("src", mediaBase + images[2]);
     }
 
     // Display parameters
     function displayParameters(params) {
-      $("#param-height").text(params.height);
-      $("#param-weight").text(params.weight);
-      $("#param-chest").text(params.chest);
-      $("#param-waist").text(params.waist);
-      $("#param-hips").text(params.hips);
-      $("#param-arm").text(params.arm);
-      $("#param-thigh").text(params.thigh);
-      $("#param-calf").text(params.calf);
-      $("#param-neck").text(params.neck);
-      $("#param-arm-length").text(params["arm-length"]);
-      $("#param-leg-length").text(params["leg-length"]);
+      $("#param-height").text(params.height || 0);
+      $("#param-weight").text(params.weight || 0);
+      $("#param-chest").text(params.chest || 0);
+      $("#param-waist").text(params.waist || 0);
+      $("#param-hips").text(params.hips || 0);
+      $("#param-arm").text(params.arm || 0);
+      $("#param-thigh").text(params.thigh || 0);
+      $("#param-calf").text(params.calf || 0);
+      $("#param-neck").text(params.neck || 0);
+      $("#param-arm-length").text(params["arm-length"] || 0);
+      $("#param-leg-length").text(params["leg-length"] || 0);
+    }
+
+    // Map backend measurement keys to frontend display keys
+    function mapMeasurements(avg) {
+      return {
+        height: Math.round(avg.user_height_cm || 0),
+        weight: Math.round(avg.user_weight_kg || 0),
+        chest: Math.round(avg.chest_circum_cm || 0),
+        waist: Math.round(avg.waist_circum_cm || 0),
+        hips: Math.round(avg.hip_circum_cm || 0),
+        arm: Math.round(avg.upperarm_circum_cm || 0),
+        thigh: Math.round(avg.thigh_circum_cm || 0),
+        calf: Math.round(avg.calf_circum_cm || 0),
+        neck: Math.round(avg.neck_circum_cm || 0),
+        "arm-length": Math.round(avg.sleeve_len_cm || 0),
+        "leg-length": Math.round(avg.pants_outseam_cm || 0),
+      };
+    }
+
+    // Show/hide a loading overlay on the check page
+    function showLoadingOverlay(show, msg) {
+      var $overlay = $("#checkLoadingOverlay");
+      if (!$overlay.length && show) {
+        $overlay = $(
+          '<div id="checkLoadingOverlay" class="loading-modal" style="display:flex">' +
+            '<div class="loading-content">' +
+              '<span class="loader"></span>' +
+              '<h3 class="loading-text">' + (msg || "در حال پردازش هوش مصنوعی...") + '</h3>' +
+            '</div>' +
+          '</div>'
+        );
+        $("body").append($overlay);
+        requestAnimationFrame(function() { $overlay.addClass("show"); });
+      }
+      if ($overlay.length) {
+        if (show) {
+          $overlay.find(".loading-text").text(msg || "در حال پردازش هوش مصنوعی...");
+          $overlay.addClass("show").css("display", "flex");
+        } else {
+          $overlay.removeClass("show");
+          setTimeout(function() { $overlay.css("display", "none"); }, 300);
+        }
+      }
+    }
+
+    // Show processing status message in parameter values
+    function showProcessingStatus(msg) {
+      $(".check-form .parameter-value[id^='param-']").text(msg || "...");
+    }
+
+    // Poll for results
+    function pollResults() {
+      if (!uploadId) return;
+
+      var resultsUrl = apiUrl("/uploads/" + uploadId + "/results", "secondary");
+      var authHeaders = {};
+      var savedToken = localStorage.getItem("auth_token");
+      if (savedToken) {
+        authHeaders["Authorization"] = "Bearer " + savedToken;
+      }
+
+      $.ajax({
+        url: resultsUrl,
+        method: "GET",
+        headers: authHeaders,
+        success: function(data) {
+          if (data.status === "processing" || data.status === "pending") {
+            showLoadingOverlay(true, "در حال پردازش هوش مصنوعی...");
+            showProcessingStatus("...");
+            pollTimer = setTimeout(pollResults, 4000);
+          } else if (data.status === "completed" || data.status === "completed_with_errors") {
+            showLoadingOverlay(false);
+
+            // Find the "Average" measurement entry
+            var avg = {};
+            if (data.measurements && data.measurements.length) {
+              for (var i = 0; i < data.measurements.length; i++) {
+                if (data.measurements[i].label === "Average") {
+                  avg = data.measurements[i].results || {};
+                  break;
+                }
+              }
+              // Fallback: use last measurement if no Average found
+              if (!Object.keys(avg).length) {
+                avg = data.measurements[data.measurements.length - 1].results || {};
+              }
+            }
+
+            displayParameters(mapMeasurements(avg));
+
+            // Display original upload images
+            if (data.original_images && data.original_images.length) {
+              displayImages(data.original_images);
+            } else if (data.processed_urls && data.processed_urls.length) {
+              displayImages(data.processed_urls);
+            }
+          } else {
+            showLoadingOverlay(false);
+            showProcessingStatus("خطا در پردازش");
+          }
+        },
+        error: function() {
+          showProcessingStatus("...");
+          pollTimer = setTimeout(pollResults, 4000);
+        }
+      });
+    }
+
+    // Load data from backend
+    function loadDataFromBackend() {
+      if (uploadId) {
+        showLoadingOverlay(true, "در حال پردازش هوش مصنوعی...");
+        showProcessingStatus("...");
+        pollResults();
+      } else {
+        // No upload_id — show zeros
+        displayParameters({
+          height: 0, weight: 0, chest: 0, waist: 0, hips: 0,
+          arm: 0, thigh: 0, calf: 0, neck: 0, "arm-length": 0, "leg-length": 0
+        });
+      }
     }
 
     // Open edit modal
@@ -436,24 +563,12 @@ $form.on("submit", (e) => {
         "leg-length": $("#edit-leg-length").val(),
       };
 
-      // In production, send to backend:
-      // $.ajax({
-      //   url: '/api/update-parameters',
-      //   method: 'POST',
-      //   data: updatedParams,
-      //   success: function(response) {
-      //     displayParameters(updatedParams);
-      //     closeModal();
-      //   }
-      // });
-
-      // For now, just update the display
       displayParameters(updatedParams);
       closeModal();
 
       // Show success message (optional)
       console.log("Parameters updated:", updatedParams);
-      window.location.href = "questions.html"
+      window.location.href = "questions.html?upload_id=" + encodeURIComponent(uploadId)
     });
 
     // Initialize page

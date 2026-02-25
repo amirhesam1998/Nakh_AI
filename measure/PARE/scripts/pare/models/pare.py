@@ -198,14 +198,14 @@ class PARE(nn.Module):
 
     def load_pretrained(self, file):
         logger.warning(f'Loading pretrained weights from {file}')
-        state_dict = torch.load(file)
+        state_dict = torch.load(file, map_location='cuda' if torch.cuda.is_available() else 'cpu', weights_only=False)
         self.backbone.load_state_dict(state_dict, strict=False)
         load_pretrained_model(self.head, state_dict=state_dict, strict=False, overwrite_shape_mismatch=True)
 
     # def load_backbone_pretrained(self, file):
     #     # This is usually used to load pretrained 2d keypoint detector weights
     #     logger.warning(f'Loading pretrained **backbone** weights from {file}')
-    #     state_dict = torch.load(file)['model']
+    #     state_dict = torch.load(file, map_location='cuda' if torch.cuda.is_available() else 'cpu', weights_only=False)['model']
     #     self.backbone.load_state_dict(state_dict, strict=False)
 
 def get_pare_model(device):
@@ -254,7 +254,7 @@ def get_pare_model(device):
     model.eval()
 
     logger.info(f'Loading pretrained model from {PARE_CKPT}')
-    ckpt = torch.load(PARE_CKPT)['state_dict']
+    ckpt = torch.load(PARE_CKPT, map_location='cuda' if torch.cuda.is_available() else 'cpu', weights_only=False)['state_dict']
     load_pretrained_model(model, ckpt, overwrite_shape_mismatch=True, remove_lightning=True)
 
     return model

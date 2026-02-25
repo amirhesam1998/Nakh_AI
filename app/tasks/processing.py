@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
-import redis
 
 from app.config import settings
 
@@ -43,36 +42,16 @@ def _average_measurements_dict(measure_list: List[Dict]) -> Dict[str, Any]:
     return avg
 
 
-def _get_sync_redis() -> redis.Redis:
-    """Get synchronous Redis client for Celery tasks."""
-    return redis.from_url(
-        settings.redis_url,
-        encoding="utf-8",
-        decode_responses=True,
-    )
+def _load_metadata(upload_id: str) -> Dict[str, Any] | None:
+    """Load upload metadata from JSON file."""
+    from app.api.uploads import _load_metadata as _load
+    return _load(upload_id)
 
 
-def _get_upload(r: redis.Redis, upload_id: str) -> Dict[str, Any] | None:
-    """Get upload from Redis."""
-    data = r.get(f"upload:{upload_id}")
-    return json.loads(data) if data else None
-
-
-def _update_upload(r: redis.Redis, upload_id: str, updates: Dict[str, Any]) -> None:
-    """Update upload in Redis."""
-    data = r.get(f"upload:{upload_id}")
-    if not data:
-        return
-
-    upload = json.loads(data)
-    upload.update(updates)
-
-    # Preserve TTL
-    ttl = r.ttl(f"upload:{upload_id}")
-    if ttl > 0:
-        r.set(f"upload:{upload_id}", json.dumps(upload), ex=ttl)
-    else:
-        r.set(f"upload:{upload_id}", json.dumps(upload))
+def _save_metadata(upload_id: str, data: Dict[str, Any]) -> None:
+    """Save upload metadata to JSON file."""
+    from app.api.uploads import _save_metadata as _save
+    _save(upload_id, data)
 
 
 # Conditional import based on Celery availability
@@ -135,10 +114,7 @@ def _process_upload_pare_impl(
     """
     logger.info(f"Starting PARE processing for upload {upload_id}")
 
-    # Use sync Redis for Celery tasks
-    r = _get_sync_redis()
-
-    upload = _get_upload(r, upload_id)
+    upload = _load_metadata(upload_id)
     if not upload:
         logger.error(f"Upload {upload_id} not found")
         return {"error": f"Upload {upload_id} not found", "status": "failed"}
@@ -157,7 +133,7 @@ def _process_upload_pare_impl(
         "errors": [],
     }
 
-    media_root = settings.media_path
+    media_root = settings.media_path.resolve()
 
     try:
         # Import processing utilities
@@ -229,7 +205,7 @@ def _process_upload_pare_impl(
             pare_script = pare_root / "scripts" / "demo.py"
 
             if pare_script.exists():
-                output_folder = media_root / "AI_Processing" / "pre"
+                output_folder = media_root / "AI_Processing" / upload_id
                 output_folder.mkdir(parents=True, exist_ok=True)
 
                 ckpt_dir = pare_root / "scripts" / "data" / "pare" / "checkpoints"
@@ -241,8 +217,8 @@ def _process_upload_pare_impl(
                         sys.executable,
                         str(pare_script),
                         "--mode", "video",
-                        "--vid_file", str(video_out_path),
-                        "--output_folder", str(output_folder),
+                        "--vid_file", str(video_out_path.resolve()),
+                        "--output_folder", str(output_folder.resolve()),
                         "--no_render",
                         "--cfg", str(cfg_path),
                         "--ckpt", str(ckpt_path),
@@ -256,6 +232,11 @@ def _process_upload_pare_impl(
                         text=True,
                         timeout=600,
                     )
+
+                    if result.returncode != 0:
+                        logger.error(f"PARE failed (rc={result.returncode}): {result.stderr.strip()}")
+                        if result.stdout.strip():
+                            logger.error(f"PARE stdout: {result.stdout.strip()[-500:]}")
 
                     if result.returncode == 0:
                         # Extract and measure
@@ -304,6 +285,7 @@ def _process_upload_pare_impl(
                                 avg_res = _average_measurements_dict(per_view_results)
                                 avg_res.update({
                                     "user_height_cm": user_height_cm,
+                                    "user_weight_kg": user_weight_kg,
                                     "width_scale": width_scale,
                                     "gender": gender,
                                 })
@@ -363,19 +345,58 @@ def _process_upload_pare_impl(
             if hasattr(task, "retry"):
                 raise task.retry(exc=e)
 
-    # Update upload in Redis
-    _update_upload(
-        r,
-        upload_id,
-        {
-            "is_processed": True,
-            "processed_at": datetime.utcnow().isoformat(),
-            "processing_results": json.dumps(results),
-        },
-    )
-
     results["errors"] = errors
     results["status"] = "completed" if not errors else "completed_with_errors"
 
+    # Include original upload image URLs for the frontend
+    results["original_images"] = [
+        f"/media/{upload.get('image1')}",
+        f"/media/{upload.get('image2')}",
+        f"/media/{upload.get('image3')}",
+    ]
+
+    if errors:
+        logger.warning(f"PARE processing for {upload_id} completed with errors: {errors}")
+
+    # Update upload metadata on disk
+    upload = _load_metadata(upload_id) or {}
+    upload.update({
+        "is_processed": True,
+        "processed_at": datetime.utcnow().isoformat(),
+        "processing_status": results["status"],
+        "processing_results": json.dumps(results),
+    })
+    _save_metadata(upload_id, upload)
+
+    # Clean up temporary processing files (keep only original uploads)
+    _cleanup_temp_files(upload_id, media_root)
+
     logger.info(f"PARE processing completed for upload {upload_id}")
     return results
+
+
+def _cleanup_temp_files(upload_id: str, media_root: Path) -> None:
+    """Remove temporary processing artifacts, keeping only original uploads."""
+    import shutil
+
+    dirs_to_clean = [
+        media_root / "videos",
+        media_root / "processed",
+        media_root / "body_models",
+        media_root / "AI_Processing" / upload_id,
+    ]
+
+    for d in dirs_to_clean:
+        if d.exists():
+            if d.name == upload_id:
+                # Remove the per-upload AI_Processing subfolder entirely
+                shutil.rmtree(d, ignore_errors=True)
+            else:
+                # Remove only this upload's files from shared folders
+                for f in d.glob(f"*{upload_id}*"):
+                    try:
+                        f.unlink()
+                    except Exception:
+                        pass
+
+    logger.info(f"Cleaned up temp files for upload {upload_id}")

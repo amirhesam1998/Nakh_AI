@@ -2,7 +2,7 @@
 // Update BASE_URL / BASE_URL_SECONDARY and API_KEY as needed.
 window.API_CONFIG = {
   BASE_URL: "http://localhost:8000/api/v1",
-  BASE_URL_SECONDARY: "http://localhost:8002/api/v1",
+  BASE_URL_SECONDARY: "http://localhost:8001/api/v1",
   API_KEY: "6p0RiczKIsIJV4SO5wGBnO1lssTWPhRnq5wm1gXq"
 };
 

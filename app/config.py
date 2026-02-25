@@ -82,9 +82,17 @@ class Settings(BaseSettings):
     llm_load_in_8bit: bool = False  # Quantization for lower memory
     llm_load_in_4bit: bool = False  # More aggressive quantization
 
+    # Ollama (local LLM server)
+    ollama_base_url: str = "http://localhost:11434"
+
     # External Shop API (for product recommendations)
     shop_api_url: str = ""  # URL to PHP shop API
     shop_api_key: str = ""  # API key for authentication
+
+    # E-commerce auth proxy (validate tokens against the main e-commerce service)
+    ecommerce_auth_url: str = "http://127.0.0.1:8000/api/v1/user"
+    ecommerce_api_key: str = "6p0RiczKIsIJV4SO5wGBnO1lssTWPhRnq5wm1gXq"
+    auth_cache_ttl_seconds: int = 300  # Cache validated tokens for 5 minutes
 
 
 # Create global settings instance

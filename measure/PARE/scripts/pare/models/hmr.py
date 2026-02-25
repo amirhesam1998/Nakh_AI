@@ -123,7 +123,7 @@ class HMR(nn.Module):
 
     def load_pretrained(self, file):
         logger.warning(f'Loading pretrained weights from {file}')
-        state_dict = torch.load(file)
+        state_dict = torch.load(file, map_location='cuda' if torch.cuda.is_available() else 'cpu', weights_only=False)
         self.backbone.load_state_dict(state_dict, strict=False)
         load_pretrained_model(self.head, state_dict=state_dict, strict=False, overwrite_shape_mismatch=True)
 
@@ -131,6 +131,6 @@ class HMR(nn.Module):
         # file = '/ps/scratch/mkocabas/developments/SPIN/logs/h36m_training/checkpoints/2020_06_28-11_14_46.pt'
         # file = 'data/model_checkpoint.pt'
         logger.warning(f'Loading pretrained weights from {file}')
-        state_dict = torch.load(file)['model']
+        state_dict = torch.load(file, map_location='cuda' if torch.cuda.is_available() else 'cpu', weights_only=False)['model']
         self.backbone.load_state_dict(state_dict, strict=False)
         self.head.load_state_dict(state_dict, strict=False)

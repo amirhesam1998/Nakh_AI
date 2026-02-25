@@ -92,6 +92,10 @@ $(function () {
         timeout: 10000,
         success: function (response) {
           if (response && response.success) {
+            // Store auth token for subsequent requests (e.g. uploads to AI service)
+            if (response.result && response.result.token) {
+              localStorage.setItem("auth_token", response.result.token);
+            }
             const redirectUrl = response.redirect || "/upload.html";
             logindiv.css("display", "none");
             window.location.href = redirectUrl;

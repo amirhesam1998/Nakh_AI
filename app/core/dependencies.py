@@ -1,15 +1,25 @@
 """
-FastAPI dependencies for Redis storage and authentication.
+FastAPI dependencies for authentication via e-commerce service proxy.
 """
+import json
+import logging
+import time
 from typing import Annotated, Any, Dict, Optional
 
+import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.config import settings
 from app.database import RedisStorage, get_storage
+
+logger = logging.getLogger(__name__)
 
 # HTTP Bearer token security scheme
 security = HTTPBearer(auto_error=False)
+
+# In-memory auth cache: token -> (user_data, expiry_timestamp)
+_auth_cache: Dict[str, tuple] = {}
 
 
 async def get_redis_storage() -> RedisStorage:
@@ -26,36 +36,103 @@ async def get_redis_storage() -> RedisStorage:
 Storage = Annotated[RedisStorage, Depends(get_redis_storage)]
 
 
+def _get_cached_user(token: str) -> Optional[Dict[str, Any]]:
+    """Check in-memory cache for a validated token."""
+    entry = _auth_cache.get(token)
+    if entry:
+        user_data, expiry = entry
+        if time.time() < expiry:
+            return user_data
+        else:
+            del _auth_cache[token]
+    return None
+
+
+def _set_cached_user(token: str, user_data: Dict[str, Any]) -> None:
+    """Store validated user in in-memory cache."""
+    expiry = time.time() + settings.auth_cache_ttl_seconds
+    _auth_cache[token] = (user_data, expiry)
+
+
 async def get_current_user(
-    storage: Storage,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> Optional[Dict[str, Any]]:
     """
-    Dependency to get the current authenticated user from token.
-
-    Args:
-        storage: Redis storage instance
-        credentials: Bearer token credentials
-
-    Returns:
-        User dict if authenticated, None otherwise
+    Validate the Bearer token by proxying to the e-commerce service.
+    Caches successful results in memory to avoid hitting the e-commerce
+    service on every request.
     """
     if not credentials:
         return None
 
-    token_key = credentials.credentials
+    token = credentials.credentials
 
-    # Get token from Redis
-    token_data = await storage.get_token(token_key)
-    if not token_data:
+    # Check in-memory cache first
+    cached = _get_cached_user(token)
+    if cached:
+        return cached
+
+    # Validate token against e-commerce service
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                settings.ecommerce_auth_url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "x-api-key": settings.ecommerce_api_key,
+                    "Accept": "application/json",
+                },
+            )
+    except Exception as e:
+        logger.error(f"Failed to reach e-commerce auth service: {e}")
         return None
 
-    # Get user from Redis
-    user = await storage.get_user_by_id(token_data["user_id"])
-    if not user or not user.get("is_active", False):
+    if response.status_code != 200:
+        logger.debug(f"E-commerce auth returned {response.status_code}")
         return None
 
-    return user
+    try:
+        data = response.json()
+    except Exception:
+        logger.warning("E-commerce auth returned non-JSON response")
+        return None
+
+    # Extract user from response
+    # Handles: {result: {user: {...}}}, {result: {id, ...}}, {user: {...}}, {id, ...}
+    user = None
+    if isinstance(data, dict):
+        result = data.get("result")
+        if isinstance(result, dict):
+            if "user" in result and isinstance(result["user"], dict):
+                user = result["user"]
+            elif "id" in result:
+                user = result
+        if not user and "user" in data and isinstance(data["user"], dict):
+            user = data["user"]
+        if not user and "id" in data:
+            user = data
+
+    if not user:
+        logger.warning(
+            f"Could not extract user from e-commerce response: "
+            f"{list(data.keys()) if isinstance(data, dict) else type(data)}"
+        )
+        return None
+
+    # Normalize to a dict with at least an "id" field
+    user_data = {
+        "id": str(user.get("id", "")),
+        "username": user.get("username", ""),
+        "email": user.get("email", ""),
+        "first_name": user.get("first_name", ""),
+        "last_name": user.get("last_name", ""),
+        "is_active": True,
+    }
+
+    # Cache in memory
+    _set_cached_user(token, user_data)
+
+    return user_data
 
 
 async def get_current_active_user(
@@ -63,12 +140,6 @@ async def get_current_active_user(
 ) -> Dict[str, Any]:
     """
     Dependency to require an authenticated active user.
-
-    Args:
-        current_user: Current user from get_current_user
-
-    Returns:
-        User dict if authenticated and active
 
     Raises:
         HTTPException: If not authenticated or user is inactive
