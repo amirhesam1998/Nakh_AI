@@ -20,6 +20,7 @@ class PhotoUploadCreate(BaseModel):
 
     height_cm: Optional[float] = Field(None, ge=50, le=250)
     weight_kg: Optional[float] = Field(None, ge=20, le=250)
+    age: Optional[int] = Field(None, ge=3, le=120)
     gender: GenderEnum = GenderEnum.MALE
 
     @field_validator("height_cm")
@@ -36,6 +37,13 @@ class PhotoUploadCreate(BaseModel):
             raise ValueError("Weight must be between 20 and 250 kg")
         return v
 
+    @field_validator("age")
+    @classmethod
+    def validate_age(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and (v < 3 or v > 120):
+            raise ValueError("Age must be between 3 and 120")
+        return v
+
 
 class PhotoUploadResponse(BaseModel):
     """Schema for photo upload response."""
@@ -45,8 +53,10 @@ class PhotoUploadResponse(BaseModel):
     image1: str
     image2: Optional[str] = None
     image3: Optional[str] = None
+    image4: Optional[str] = None
     height_cm: Optional[float] = None
     weight_kg: Optional[float] = None
+    age: Optional[int] = None
     gender: str
     uploaded_at: datetime
     processed_at: Optional[datetime] = None
@@ -55,7 +65,7 @@ class PhotoUploadResponse(BaseModel):
     @property
     def image_count(self) -> int:
         """Count of uploaded images."""
-        return sum(1 for img in [self.image1, self.image2, self.image3] if img)
+        return sum(1 for img in [self.image1, self.image2, self.image3, self.image4] if img)
 
 
 class PhotoUploadListResponse(BaseModel):

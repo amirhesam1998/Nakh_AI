@@ -25,9 +25,8 @@ class ProductService:
     """
 
     def __init__(self):
-        # Get API URL from settings (to be configured)
-        self.api_base_url = getattr(settings, "SHOP_API_URL", None)
-        self.api_key = getattr(settings, "SHOP_API_KEY", None)
+        self.api_base_url = getattr(settings, "shop_api_url", "") or getattr(settings, "SHOP_API_URL", "")
+        self.api_key = getattr(settings, "shop_api_key", "") or getattr(settings, "SHOP_API_KEY", "")
         self._client: Optional[httpx.AsyncClient] = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -35,7 +34,7 @@ class ProductService:
         if self._client is None:
             headers = {}
             if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
+                headers["x-api-key"] = self.api_key
             self._client = httpx.AsyncClient(
                 base_url=self.api_base_url or "",
                 headers=headers,
@@ -104,6 +103,117 @@ class ProductService:
         except Exception as e:
             logger.error(f"Unexpected error fetching products: {e}")
             return []
+
+    async def fetch_products_for_recommendation(self, answers: dict) -> list[dict]:
+        """Backwards-compatible wrapper that drops the source metadata."""
+        products, _ = await self.fetch_products_for_recommendation_with_source(answers)
+        return products
+
+    async def fetch_products_for_recommendation_with_source(
+        self,
+        answers: dict,
+        gender: str = "",
+        calculated_size: str = "",
+    ) -> tuple[list[dict], str]:
+        """
+        Fetch products filtered by questionnaire answers from the Laravel API.
+
+        Returns (products, source) where source is one of:
+          - "shop"    – real catalog response from the CMS
+          - "mock"    – mock fallback (CMS unreachable / unconfigured / empty)
+        """
+        if not self.api_base_url:
+            logger.warning("SHOP_API_URL not configured, returning mock data")
+            return self._get_mock_products(), "mock"
+
+        try:
+            client = await self._get_client()
+
+            params: dict = {"limit": 20}
+
+            # Map category answer
+            category = answers.get("category", "").lower()
+            if category in ("garment", "پوشاک"):
+                params["category"] = "garment"
+            elif category in ("fabric", "پارچه"):
+                params["category"] = "fabric"
+
+            # Map type answer to search
+            search = (
+                answers.get("garmentType")
+                or answers.get("fabricType")
+                or answers.get("type")
+                or ""
+            )
+            if search:
+                params["search"] = search
+
+            # Gender filter
+            if gender:
+                params["gender"] = gender
+
+            # Garment type filter from questionnaire
+            garment_type = answers.get("garmentType") or ""
+            if garment_type:
+                params["garment_type"] = garment_type
+
+            # Size filter — try with size first, fall back without if empty
+            if calculated_size:
+                params["size"] = calculated_size
+
+            # Style / Occasion / Season filters
+            for key in ("style", "occasion", "season"):
+                val = answers.get(key, "")
+                if val:
+                    # If it's a list (checkbox), send first value for filter
+                    if isinstance(val, list):
+                        params[key] = val[0] if val else ""
+                    else:
+                        params[key] = val
+
+            # Price filters
+            if answers.get("minPrice"):
+                params["min_price"] = answers["minPrice"]
+            if answers.get("maxPrice"):
+                params["max_price"] = answers["maxPrice"]
+
+            response = await client.get(
+                "/api/v1/products/for-recommendation", params=params
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            products = data.get("data", data) if isinstance(data, dict) else data
+            if isinstance(products, list) and products:
+                return products, "shop"
+
+            # Smart fallback: progressively relax filters until products are found
+            relaxable = ["size", "style", "occasion", "season"]
+            while not (isinstance(products, list) and products) and any(k in params for k in relaxable):
+                # Remove the most specific filter first
+                for key in relaxable:
+                    if key in params:
+                        logger.info("No products found, retrying without %s=%s", key, params[key])
+                        params.pop(key)
+                        break
+                response = await client.get(
+                    "/api/v1/products/for-recommendation", params=params
+                )
+                response.raise_for_status()
+                data = response.json()
+                products = data.get("data", data) if isinstance(data, dict) else data
+                if isinstance(products, list) and products:
+                    return products, "shop"
+
+            logger.warning("Laravel returned empty products, falling back to mocks")
+            return self._get_mock_products(), "mock"
+
+        except httpx.HTTPError as e:
+            logger.error("Error fetching recommendation products: %s", e)
+            return self._get_mock_products(), "mock"
+        except Exception as e:
+            logger.error("Unexpected error fetching recommendation products: %s", e)
+            return self._get_mock_products(), "mock"
 
     async def get_product_by_id(self, product_id: str) -> Optional[dict]:
         """
@@ -256,68 +366,95 @@ class ProductService:
         return [
             {
                 "id": "1",
-                "name": "Classic Cotton Shirt",
-                "name_fa": "پیراهن کلاسیک پنبه‌ای",
-                "description": "A comfortable classic cotton shirt",
+                "title": "پیراهن کلاسیک پنبه‌ای",
+                "title_en": "Classic Cotton Shirt",
+                "slug": "classic-cotton-shirt",
+                "brand": "نخ‌نما",
                 "price": 450000,
+                "regular_price": 500000,
                 "category": "پیراهن",
-                "fabric": "cotton",
-                "style": "classic",
-                "colors": ["سفید", "آبی", "مشکی"],
-                "sizes": ["S", "M", "L", "XL"],
-                "image_url": None,
+                "is_available": True,
+                "image": None,
+                "product_url": None,
+                "variants": [
+                    {"price": 450000, "discount": 10, "attributes": {"اندازه": "S"}, "in_stock": True},
+                    {"price": 450000, "discount": 10, "attributes": {"اندازه": "M"}, "in_stock": True},
+                    {"price": 450000, "discount": 10, "attributes": {"اندازه": "L"}, "in_stock": True},
+                    {"price": 460000, "discount": 8, "attributes": {"اندازه": "XL"}, "in_stock": True},
+                ],
+                "specifications": {"جنس پارچه": "نخ پنبه", "یقه": "کلاسیک"},
             },
             {
                 "id": "2",
-                "name": "Formal Wool Pants",
-                "name_fa": "شلوار رسمی پشمی",
-                "description": "Elegant wool pants for formal occasions",
+                "title": "شلوار رسمی پشمی",
+                "title_en": "Formal Wool Pants",
+                "slug": "formal-wool-pants",
+                "brand": "ایران‌دوخت",
                 "price": 680000,
+                "regular_price": 680000,
                 "category": "شلوار",
-                "fabric": "wool",
-                "style": "formal",
-                "colors": ["مشکی", "خاکستری", "سرمه‌ای"],
-                "sizes": ["30", "32", "34", "36", "38"],
-                "image_url": None,
+                "is_available": True,
+                "image": None,
+                "product_url": None,
+                "variants": [
+                    {"price": 680000, "discount": 0, "attributes": {"اندازه": "M"}, "in_stock": True},
+                    {"price": 680000, "discount": 0, "attributes": {"اندازه": "L"}, "in_stock": True},
+                    {"price": 680000, "discount": 0, "attributes": {"اندازه": "XL"}, "in_stock": False},
+                ],
+                "specifications": {"جنس پارچه": "پشم", "فیت": "رسمی"},
             },
             {
                 "id": "3",
-                "name": "Casual Linen Jacket",
-                "name_fa": "کت کژوال کتانی",
-                "description": "Light linen jacket for casual wear",
+                "title": "کت کژوال کتانی",
+                "title_en": "Casual Linen Jacket",
+                "slug": "casual-linen-jacket",
+                "brand": "نخ‌نما",
                 "price": 890000,
+                "regular_price": 990000,
                 "category": "کت",
-                "fabric": "linen",
-                "style": "casual",
-                "colors": ["کرم", "آبی روشن", "سبز"],
-                "sizes": ["M", "L", "XL", "XXL"],
-                "image_url": None,
+                "is_available": True,
+                "image": None,
+                "product_url": None,
+                "variants": [
+                    {"price": 890000, "discount": 10, "attributes": {"اندازه": "M"}, "in_stock": True},
+                    {"price": 890000, "discount": 10, "attributes": {"اندازه": "L"}, "in_stock": True},
+                    {"price": 890000, "discount": 10, "attributes": {"اندازه": "XL"}, "in_stock": True},
+                    {"price": 890000, "discount": 10, "attributes": {"اندازه": "XXL"}, "in_stock": True},
+                ],
+                "specifications": {"جنس پارچه": "کتان", "سبک": "کژوال"},
             },
             {
                 "id": "4",
-                "name": "Silk Tie",
-                "name_fa": "کراوات ابریشمی",
-                "description": "Premium silk tie",
+                "title": "کراوات ابریشمی",
+                "title_en": "Silk Tie",
+                "slug": "silk-tie",
+                "brand": "رِیواس",
                 "price": 320000,
+                "regular_price": 320000,
                 "category": "اکسسوری",
-                "fabric": "silk",
-                "style": "formal",
-                "colors": ["قرمز", "آبی", "طلایی"],
-                "sizes": ["One Size"],
-                "image_url": None,
+                "is_available": True,
+                "image": None,
+                "product_url": None,
+                "variants": [],
+                "specifications": {"جنس پارچه": "ابریشم"},
             },
             {
                 "id": "5",
-                "name": "Denim Jeans",
-                "name_fa": "شلوار جین",
-                "description": "Classic denim jeans",
+                "title": "شلوار جین",
+                "title_en": "Denim Jeans",
+                "slug": "denim-jeans",
+                "brand": "ایران‌دوخت",
                 "price": 520000,
+                "regular_price": 520000,
                 "category": "شلوار",
-                "fabric": "denim",
-                "style": "casual",
-                "colors": ["آبی", "مشکی", "آبی روشن"],
-                "sizes": ["28", "30", "32", "34", "36"],
-                "image_url": None,
+                "is_available": False,
+                "image": None,
+                "product_url": None,
+                "variants": [
+                    {"price": 520000, "discount": 0, "attributes": {"اندازه": "M"}, "in_stock": False},
+                    {"price": 520000, "discount": 0, "attributes": {"اندازه": "L"}, "in_stock": False},
+                ],
+                "specifications": {"جنس پارچه": "جین"},
             },
         ]
 

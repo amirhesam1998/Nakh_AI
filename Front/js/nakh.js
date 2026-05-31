@@ -10,10 +10,11 @@
     const apiUrl = window.apiUrl || ((path) => path)
     const API_UPLOAD_URL = apiUrl("/uploads", "secondary")
 
-    // Initialize upload areas (adjust selectors to match your HTML)
+    // Initialize upload areas (4 poses: Front A, Side, Back A, Front T)
     setupUploadArea("#uploadArea1", "#photo1", "#previewArea1")
     setupUploadArea("#uploadArea2", "#photo2", "#previewArea2")
     setupUploadArea("#uploadArea3", "#photo3", "#previewArea3")
+    setupUploadArea("#uploadArea4", "#photo4", "#previewArea4")
 
     showGuidanceModal()
 
@@ -29,18 +30,22 @@ $form.on("submit", (e) => {
   const $photo1 = $("#photo1")
   const $photo2 = $("#photo2")
   const $photo3 = $("#photo3")
+  const $photo4 = $("#photo4")
+  const $gender = $("#gender")
+  const $age = $("#age")
   const $height = $("#height_cm")
   const $weight = $("#weight_kg")
-  const $gender = $("#gender")
 
   const missing = []
 
-  if (!$photo1[0] || !$photo1[0].files || !$photo1[0].files.length) missing.push("عکس جلو")
-  if (!$photo2[0] || !$photo2[0].files || !$photo2[0].files.length) missing.push("عکس پشت")
-  if (!$photo3[0] || !$photo3[0].files || !$photo3[0].files.length) missing.push("عکس کناری")
+  if (!$photo1[0] || !$photo1[0].files || !$photo1[0].files.length) missing.push("عکس جلو (A-Pose)")
+  if (!$photo2[0] || !$photo2[0].files || !$photo2[0].files.length) missing.push("عکس نیم‌رخ (کناری)")
+  if (!$photo3[0] || !$photo3[0].files || !$photo3[0].files.length) missing.push("عکس پشت (A-Pose)")
+  if (!$photo4[0] || !$photo4[0].files || !$photo4[0].files.length) missing.push("عکس جلو (T-Pose)")
+  if (!$gender.val()) missing.push("جنسیت")
+  if (!$age.val()) missing.push("سن")
   if (!$height.val()) missing.push("قد")
   if (!$weight.val()) missing.push("وزن")
-  if (!$gender.val()) missing.push("جنسیت")
 
   if (missing.length > 0) {
     showWarning(missing)
@@ -118,7 +123,23 @@ $form.on("submit", (e) => {
     },
     error: function (jqXHR, textStatus) {
       console.error("Upload error:", textStatus, jqXHR)
-      alert("ارور در ارسال داده‌ها رخ داد. لطفاً دوباره تلاش کنید.")
+      // Extract Persian error messages from backend response
+      var errorMsgs = []
+      try {
+        var body = jqXHR.responseJSON
+        if (body && body.detail) {
+          if (Array.isArray(body.detail)) {
+            errorMsgs = body.detail
+          } else if (typeof body.detail === "string") {
+            errorMsgs = [body.detail]
+          }
+        }
+      } catch (e) { /* ignore parse errors */ }
+
+      if (!errorMsgs.length) {
+        errorMsgs = ["آپلود تصویر با مشکل مواجه شد. لطفاً اتصال اینترنت خود را بررسی کرده و دوباره تلاش کنید."]
+      }
+      showWarning(errorMsgs)
       $form.data("submitting", false)
       $loading.removeClass("show").css("display", "none")
     },
@@ -238,23 +259,47 @@ $form.on("submit", (e) => {
     /**
      * Read file and render preview
      */
+    // Supported image MIME types (including iPhone formats)
+    var SUPPORTED_TYPES = [
+      "image/jpeg", "image/png", "image/heic", "image/heif", "image/webp"
+    ]
+    var SUPPORTED_EXTS = [".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp"]
+
     function handleFileSelect(file, $content, $preview, areaSel, inputSel, previewSel) {
-      // Basic type guard (optional): images only
-      if (file && file.type && !/^image\//i.test(file.type)) {
-        showWarning(["فایل انتخاب‌شده تصویر نیست"])
+      if (!file) return
+
+      // Check by MIME type (if available)
+      if (file.type && !file.type.match(/^image\//i)) {
+        showWarning(["فرمت تصویر پشتیبانی نمی‌شود. لطفاً تصویر دیگری انتخاب کنید."])
         return
       }
 
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        // Hide helper content; show preview
+      // Check by file extension
+      var fname = (file.name || "").toLowerCase()
+      var ext = fname.substring(fname.lastIndexOf("."))
+      if (ext && SUPPORTED_EXTS.indexOf(ext) === -1) {
+        showWarning(["فرمت تصویر پشتیبانی نمی‌شود. لطفاً تصویر دیگری انتخاب کنید."])
+        return
+      }
+
+      // Check for empty files
+      if (file.size === 0) {
+        showWarning(["فایل تصویر خالی است. لطفاً دوباره تلاش کنید."])
+        return
+      }
+
+      // HEIC/HEIF can't be previewed in browser — show placeholder
+      var isHeic = /\.(heic|heif)$/i.test(file.name || "")
+
+      function showPreview(src, isPlaceholder) {
         $content.css("display", "none")
+        var imgHtml = isPlaceholder
+          ? '<div class="preview-placeholder"><i class="ri-image-line"></i><span>HEIC — تبدیل خودکار هنگام ارسال</span></div>'
+          : '<img src="' + src + '" alt="Preview" class="preview-image">'
         $preview
           .html(
             [
-              '<img src="',
-              e.target.result,
-              '" alt="Preview" class="preview-image">',
+              imgHtml,
               '<button type="button" class="remove-image" data-area="',
               areaSel,
               '" data-input="',
@@ -268,12 +313,23 @@ $form.on("submit", (e) => {
           )
           .css("display", "block")
 
-        $preview.find(".preview-image").on("click", (e) => {
-          e.stopPropagation()
-          showImageViewer(e.target.src)
-        })
+        if (!isPlaceholder) {
+          $preview.find(".preview-image").on("click", (e) => {
+            e.stopPropagation()
+            showImageViewer(e.target.src)
+          })
+        }
       }
-      reader.readAsDataURL(file)
+
+      if (isHeic) {
+        showPreview(null, true)
+      } else {
+        const reader = new FileReader()
+        reader.onload = (e) => {
+          showPreview(e.target.result, false)
+        }
+        reader.readAsDataURL(file)
+      }
     }
 
     /**
@@ -368,17 +424,19 @@ $form.on("submit", (e) => {
     // Build media URL from the secondary API base (e.g. http://localhost:8001)
     var mediaBase = (window.API_CONFIG && window.API_CONFIG.BASE_URL_SECONDARY || "").replace(/\/api\/v1\/?$/, "");
 
-    // Display images
+    // Display images (4 poses: Front A, Side, Back A, Front T)
     function displayImages(images) {
       if (images[0]) $("#checkImage1").attr("src", mediaBase + images[0]);
       if (images[1]) $("#checkImage2").attr("src", mediaBase + images[1]);
       if (images[2]) $("#checkImage3").attr("src", mediaBase + images[2]);
+      if (images[3]) $("#checkImage4").attr("src", mediaBase + images[3]);
     }
 
     // Display parameters
     function displayParameters(params) {
       $("#param-height").text(params.height || 0);
       $("#param-weight").text(params.weight || 0);
+      $("#param-age").text(params.age || 0);
       $("#param-chest").text(params.chest || 0);
       $("#param-waist").text(params.waist || 0);
       $("#param-hips").text(params.hips || 0);
@@ -395,6 +453,7 @@ $form.on("submit", (e) => {
       return {
         height: Math.round(avg.user_height_cm || 0),
         weight: Math.round(avg.user_weight_kg || 0),
+        age: avg.age || 0,
         chest: Math.round(avg.chest_circum_cm || 0),
         waist: Math.round(avg.waist_circum_cm || 0),
         hips: Math.round(avg.hip_circum_cm || 0),
@@ -461,22 +520,33 @@ $form.on("submit", (e) => {
           } else if (data.status === "completed" || data.status === "completed_with_errors") {
             showLoadingOverlay(false);
 
-            // Find the "Average" measurement entry
+            // Find the "Consensus" or "Average" measurement entry
             var avg = {};
             if (data.measurements && data.measurements.length) {
               for (var i = 0; i < data.measurements.length; i++) {
-                if (data.measurements[i].label === "Average") {
+                var lbl = data.measurements[i].label;
+                if (lbl === "Consensus" || lbl === "Average") {
                   avg = data.measurements[i].results || {};
                   break;
                 }
               }
-              // Fallback: use last measurement if no Average found
+              // Fallback: use last measurement if no Consensus/Average found
               if (!Object.keys(avg).length) {
                 avg = data.measurements[data.measurements.length - 1].results || {};
               }
             }
 
             displayParameters(mapMeasurements(avg));
+
+            // Display confidence indicators if available
+            if (data.confidences) {
+              displayConfidences(data.confidences);
+            }
+
+            // Display global warnings if any
+            if (data.global_warnings && data.global_warnings.length) {
+              displayGlobalWarnings(data.global_warnings);
+            }
 
             // Display original upload images
             if (data.original_images && data.original_images.length) {
@@ -496,6 +566,56 @@ $form.on("submit", (e) => {
       });
     }
 
+    // Confidence → frontend parameter ID mapping
+    var confidenceKeyMap = {
+      "chest_circum_cm": "param-chest",
+      "waist_circum_cm": "param-waist",
+      "hip_circum_cm": "param-hips",
+      "upperarm_circum_cm": "param-arm",
+      "thigh_circum_cm": "param-thigh",
+      "calf_circum_cm": "param-calf",
+      "neck_circum_cm": "param-neck",
+      "sleeve_len_cm": "param-arm-length",
+      "pants_outseam_cm": "param-leg-length",
+    };
+
+    // Display confidence badges next to parameter values
+    function displayConfidences(confidences) {
+      // Remove old badges
+      $(".confidence-badge").remove();
+
+      for (var key in confidences) {
+        var paramId = confidenceKeyMap[key];
+        if (!paramId) continue;
+        var $el = $("#" + paramId);
+        if (!$el.length) continue;
+
+        var score = confidences[key];
+        var pct = Math.round(score * 100);
+        var cls = score >= 0.75 ? "high" : score >= 0.50 ? "mid" : "low";
+        var $badge = $('<span class="confidence-badge confidence-' + cls + '" title="اطمینان: ' + pct + '%">' + pct + '%</span>');
+        $el.after($badge);
+      }
+    }
+
+    // Display global measurement warnings
+    function displayGlobalWarnings(warnings) {
+      var $container = $("#globalWarnings");
+      if (!$container.length) {
+        $container = $('<div id="globalWarnings" class="global-warnings"></div>');
+        $(".check-form .parameters-grid").first().before($container);
+      }
+      $container.empty();
+      if (!warnings.length) return;
+
+      var $title = $('<div class="warnings-title"><i class="ri-alert-line"></i> هشدارها</div>');
+      var $list = $('<ul class="warnings-list"></ul>');
+      for (var i = 0; i < warnings.length; i++) {
+        $list.append('<li>' + warnings[i] + '</li>');
+      }
+      $container.append($title, $list);
+    }
+
     // Load data from backend
     function loadDataFromBackend() {
       if (uploadId) {
@@ -505,7 +625,7 @@ $form.on("submit", (e) => {
       } else {
         // No upload_id — show zeros
         displayParameters({
-          height: 0, weight: 0, chest: 0, waist: 0, hips: 0,
+          height: 0, weight: 0, age: 0, chest: 0, waist: 0, hips: 0,
           arm: 0, thigh: 0, calf: 0, neck: 0, "arm-length": 0, "leg-length": 0
         });
       }
@@ -516,6 +636,7 @@ $form.on("submit", (e) => {
       // Populate modal with current values
       $("#edit-height").val($("#param-height").text());
       $("#edit-weight").val($("#param-weight").text());
+      $("#edit-age").val($("#param-age").text());
       $("#edit-chest").val($("#param-chest").text());
       $("#edit-waist").val($("#param-waist").text());
       $("#edit-hips").val($("#param-hips").text());
@@ -552,6 +673,7 @@ $form.on("submit", (e) => {
       const updatedParams = {
         height: $("#edit-height").val(),
         weight: $("#edit-weight").val(),
+        age: $("#edit-age").val(),
         chest: $("#edit-chest").val(),
         waist: $("#edit-waist").val(),
         hips: $("#edit-hips").val(),

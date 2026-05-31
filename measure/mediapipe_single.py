@@ -14,14 +14,26 @@ import mediapipe as mp
 
 Number = Union[int, float]
 
+_POSE_MODEL_PATH = Path(__file__).resolve().parent / "data" / "pose_landmarker_lite.task"
+
 
 @dataclass
 class MPConfig:
     """MediaPipe measurement configuration."""
     height_cm: Optional[Number] = None
     weight_kg: Optional[Number] = None
+    age: Optional[int] = None
     gender: Optional[str] = None
     min_vis: float = 0.5
+
+    @property
+    def body_model(self) -> str:
+        """Classify into child/teen/adult based on age."""
+        if self.age is not None and self.age < 13:
+            return "child"
+        elif self.age is not None and self.age < 18:
+            return "teen"
+        return "adult"
 
 
 class MediaPipeSingleMeasurer:
@@ -116,9 +128,10 @@ class MediaPipeSingleMeasurer:
     def _depth_ratio_for_part(
         part: str,
         gender: Optional[str],
-        bmi: Optional[float]
+        bmi: Optional[float],
+        body_model: str = "adult",
     ) -> float:
-        """Get depth ratio for body part."""
+        """Get depth ratio for body part, adjusted by age-based body model."""
         g = (gender or "").strip().lower()
         if part == "chest":
             base = 0.85 if g == "male" else 0.75
@@ -132,6 +145,13 @@ class MediaPipeSingleMeasurer:
             base = 1.00
         else:
             base = 0.85
+
+        # Age-based adjustment: children/teens have different proportions
+        if body_model == "child":
+            base *= 0.85
+        elif body_model == "teen":
+            base *= 0.93
+
         if bmi is None:
             r = base
         else:
@@ -205,175 +225,187 @@ class MediaPipeSingleMeasurer:
         Returns:
             Tuple of (metrics_dict, mp_result)
         """
-        mp_pose = mp.solutions.pose
-        with mp_pose.Pose(static_image_mode=True, model_complexity=1) as pose:
-            res = pose.process(rgb)
-            if not res.pose_landmarks:
-                raise RuntimeError("Pose landmarks not found.")
+        from mediapipe.tasks.python import BaseOptions, vision
 
-            lm = res.pose_landmarks.landmark
-            h, w = rgb.shape[:2]
+        if not _POSE_MODEL_PATH.exists():
+            raise RuntimeError(f"Pose model not found at {_POSE_MODEL_PATH}")
 
-            # Landmark indices
-            L_SHO, R_SHO = 11, 12
-            L_ELB, R_ELB = 13, 14
-            L_WRIST, R_WRIST = 15, 16
-            L_HIP, R_HIP = 23, 24
-            L_KNEE, R_KNEE = 25, 26
-            L_ANKLE, R_ANKLE = 27, 28
-            L_HEEL, R_HEEL = 29, 30
+        options = vision.PoseLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=str(_POSE_MODEL_PATH)),
+            num_poses=1,
+        )
+        landmarker = vision.PoseLandmarker.create_from_options(options)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        res = landmarker.detect(mp_image)
+        landmarker.close()
 
-            pLsho = self._safe_pt(lm, L_SHO, w, h)
-            pRsho = self._safe_pt(lm, R_SHO, w, h)
-            pLelb = self._safe_pt(lm, L_ELB, w, h)
-            pRelb = self._safe_pt(lm, R_ELB, w, h)
-            pLwri = self._safe_pt(lm, L_WRIST, w, h)
-            pRwri = self._safe_pt(lm, R_WRIST, w, h)
-            pLhip = self._safe_pt(lm, L_HIP, w, h)
-            pRhip = self._safe_pt(lm, R_HIP, w, h)
-            pLkne = self._safe_pt(lm, L_KNEE, w, h)
-            pRkne = self._safe_pt(lm, R_KNEE, w, h)
-            pLank = self._safe_pt(lm, L_ANKLE, w, h)
-            pRank = self._safe_pt(lm, R_ANKLE, w, h)
-            pLhel = self._safe_pt(lm, L_HEEL, w, h)
-            pRhel = self._safe_pt(lm, R_HEEL, w, h)
+        if not res.pose_landmarks or len(res.pose_landmarks) == 0:
+            raise RuntimeError("Pose landmarks not found.")
 
-            # Scale
-            cm_per_px = None
-            px_height = self._estimate_pixel_height(lm, w, h)
-            if self.cfg.height_cm and px_height and px_height > 0:
-                cm_per_px = float(self.cfg.height_cm) / float(px_height)
+        lm = res.pose_landmarks[0]
+        h, w = rgb.shape[:2]
 
-            # Depth ratios
-            bmi = self._compute_bmi(self.cfg.height_cm, self.cfg.weight_kg)
-            raw_dr = {
-                "chest": self._depth_ratio_for_part("chest", self.cfg.gender, bmi),
-                "waist": self._depth_ratio_for_part("waist", self.cfg.gender, bmi),
-                "hip": self._depth_ratio_for_part("hip", self.cfg.gender, bmi),
-                "thigh": self._depth_ratio_for_part("thigh", self.cfg.gender, bmi),
-                "upper_arm": self._depth_ratio_for_part("upper_arm", self.cfg.gender, bmi),
-            }
-            dr = {k: self._clamp(v, 0.60, 1.10) for k, v in raw_dr.items()}
+        # Landmark indices
+        L_SHO, R_SHO = 11, 12
+        L_ELB, R_ELB = 13, 14
+        L_WRIST, R_WRIST = 15, 16
+        L_HIP, R_HIP = 23, 24
+        L_KNEE, R_KNEE = 25, 26
+        L_ANKLE, R_ANKLE = 27, 28
+        L_HEEL, R_HEEL = 29, 30
 
-            # Widths
-            shoulder_px = (
-                self._euclid((pLsho[0], pLsho[1]), (pRsho[0], pRsho[1]))
-                if self._vis_ok(pLsho, pRsho, thr=self.cfg.min_vis) else None
-            )
-            chest_px = shoulder_px * 1.15 if shoulder_px else None
+        pLsho = self._safe_pt(lm, L_SHO, w, h)
+        pRsho = self._safe_pt(lm, R_SHO, w, h)
+        pLelb = self._safe_pt(lm, L_ELB, w, h)
+        pRelb = self._safe_pt(lm, R_ELB, w, h)
+        pLwri = self._safe_pt(lm, L_WRIST, w, h)
+        pRwri = self._safe_pt(lm, R_WRIST, w, h)
+        pLhip = self._safe_pt(lm, L_HIP, w, h)
+        pRhip = self._safe_pt(lm, R_HIP, w, h)
+        pLkne = self._safe_pt(lm, L_KNEE, w, h)
+        pRkne = self._safe_pt(lm, R_KNEE, w, h)
+        pLank = self._safe_pt(lm, L_ANKLE, w, h)
+        pRank = self._safe_pt(lm, R_ANKLE, w, h)
+        pLhel = self._safe_pt(lm, L_HEEL, w, h)
+        pRhel = self._safe_pt(lm, R_HEEL, w, h)
 
-            pelvis_core_px = (
-                self._euclid((pLhip[0], pLhip[1]), (pRhip[0], pRhip[1]))
-                if self._vis_ok(pLhip, pRhip, thr=self.cfg.min_vis) else None
-            )
-            if pelvis_core_px:
-                waist_px = pelvis_core_px * 1.60
-                hip_px = pelvis_core_px * 1.75
-            else:
-                waist_px = hip_px = None
+        # Scale
+        cm_per_px = None
+        px_height = self._estimate_pixel_height(lm, w, h)
+        if self.cfg.height_cm and px_height and px_height > 0:
+            cm_per_px = float(self.cfg.height_cm) / float(px_height)
 
-            tL = self._thigh_diam_px(pLhip, pLkne, beta=0.20)
-            tR = self._thigh_diam_px(pRhip, pRkne, beta=0.20)
-            thigh_width_px = max(tL, tR) if (tL and tR) else (tL or tR or None)
+        # Depth ratios (age-aware)
+        bmi = self._compute_bmi(self.cfg.height_cm, self.cfg.weight_kg)
+        bm = self.cfg.body_model
+        raw_dr = {
+            "chest": self._depth_ratio_for_part("chest", self.cfg.gender, bmi, bm),
+            "waist": self._depth_ratio_for_part("waist", self.cfg.gender, bmi, bm),
+            "hip": self._depth_ratio_for_part("hip", self.cfg.gender, bmi, bm),
+            "thigh": self._depth_ratio_for_part("thigh", self.cfg.gender, bmi, bm),
+            "upper_arm": self._depth_ratio_for_part("upper_arm", self.cfg.gender, bmi, bm),
+        }
+        dr = {k: self._clamp(v, 0.60, 1.10) for k, v in raw_dr.items()}
 
-            uL = self._upper_arm_diam_px(pLsho, pLelb, alpha=0.20)
-            uR = self._upper_arm_diam_px(pRsho, pRelb, alpha=0.20)
-            upper_arm_width_px = max(uL, uR) if (uL and uR) else (uL or uR or None)
+        # Widths
+        shoulder_px = (
+            self._euclid((pLsho[0], pLsho[1]), (pRsho[0], pRsho[1]))
+            if self._vis_ok(pLsho, pRsho, thr=self.cfg.min_vis) else None
+        )
+        chest_px = shoulder_px * 1.15 if shoulder_px else None
 
-            # Lengths
-            sleeve_L_px = (
-                self._euclid((pLsho[0], pLsho[1]), (pLwri[0], pLwri[1]))
-                if self._vis_ok(pLsho, pLwri, thr=self.cfg.min_vis) else None
-            )
-            sleeve_R_px = (
-                self._euclid((pRsho[0], pRsho[1]), (pRwri[0], pRwri[1]))
-                if self._vis_ok(pRsho, pRwri, thr=self.cfg.min_vis) else None
-            )
-            sleeve_px = (
-                sleeve_L_px if sleeve_L_px and not sleeve_R_px else
-                sleeve_R_px if sleeve_R_px and not sleeve_L_px else
-                (0.5 * (sleeve_L_px + sleeve_R_px) if sleeve_L_px and sleeve_R_px else None)
-            )
+        pelvis_core_px = (
+            self._euclid((pLhip[0], pLhip[1]), (pRhip[0], pRhip[1]))
+            if self._vis_ok(pLhip, pRhip, thr=self.cfg.min_vis) else None
+        )
+        if pelvis_core_px:
+            waist_px = pelvis_core_px * 1.60
+            hip_px = pelvis_core_px * 1.75
+        else:
+            waist_px = hip_px = None
 
-            if self._vis_ok(pLhip, pRhip, pLhel, pRhel, thr=0.3):
-                waist_mid = self._mid((pLhip[0], pLhip[1]), (pRhip[0], pRhip[1]))
-                heel_mid = self._mid((pLhel[0], pLhel[1]), (pRhel[0], pRhel[1]))
-                outseam_px = self._euclid(waist_mid, heel_mid)
-            else:
-                outseam_px = None
+        tL = self._thigh_diam_px(pLhip, pLkne, beta=0.20)
+        tR = self._thigh_diam_px(pRhip, pRkne, beta=0.20)
+        thigh_width_px = max(tL, tR) if (tL and tR) else (tL or tR or None)
 
-            if self._vis_ok(pLhip, pRhip, pLank, pRank, thr=0.3):
-                crotch = self._mid((pLhip[0], pLhip[1]), (pRhip[0], pRhip[1]))
-                ankle_mid = self._mid((pLank[0], pLank[1]), (pRank[0], pRank[1]))
-                inseam_px = self._euclid(crotch, ankle_mid)
-            else:
-                inseam_px = None
+        uL = self._upper_arm_diam_px(pLsho, pLelb, alpha=0.20)
+        uR = self._upper_arm_diam_px(pRsho, pRelb, alpha=0.20)
+        upper_arm_width_px = max(uL, uR) if (uL and uR) else (uL or uR or None)
 
-            if self._vis_ok(pLsho, pRsho, thr=0.3):
-                neck_hollow = self._mid((pLsho[0], pLsho[1]), (pRsho[0], pRsho[1]))
-                neck_hollow = (neck_hollow[0], neck_hollow[1] + 0.06 * abs(pLsho[1] - pRsho[1] + w * 0.0))
-            else:
-                neck_hollow = None
+        # Lengths
+        sleeve_L_px = (
+            self._euclid((pLsho[0], pLsho[1]), (pLwri[0], pLwri[1]))
+            if self._vis_ok(pLsho, pLwri, thr=self.cfg.min_vis) else None
+        )
+        sleeve_R_px = (
+            self._euclid((pRsho[0], pRsho[1]), (pRwri[0], pRwri[1]))
+            if self._vis_ok(pRsho, pRwri, thr=self.cfg.min_vis) else None
+        )
+        sleeve_px = (
+            sleeve_L_px if sleeve_L_px and not sleeve_R_px else
+            sleeve_R_px if sleeve_R_px and not sleeve_L_px else
+            (0.5 * (sleeve_L_px + sleeve_R_px) if sleeve_L_px and sleeve_R_px else None)
+        )
 
-            hip_mid = (
-                self._mid((pLhip[0], pLhip[1]), (pRhip[0], pRhip[1]))
-                if self._vis_ok(pLhip, pRhip, thr=0.3) else None
-            )
-            floor_mid = (
-                self._mid((pLhel[0], pLhel[1]), (pRhel[0], pRhel[1]))
-                if self._vis_ok(pLhel, pRhel, thr=0.3) else None
-            )
+        if self._vis_ok(pLhip, pRhip, pLhel, pRhel, thr=0.3):
+            waist_mid = self._mid((pLhip[0], pLhip[1]), (pRhip[0], pRhip[1]))
+            heel_mid = self._mid((pLhel[0], pLhel[1]), (pRhel[0], pRhel[1]))
+            outseam_px = self._euclid(waist_mid, heel_mid)
+        else:
+            outseam_px = None
 
-            top_len_px = self._euclid(neck_hollow, hip_mid) if (neck_hollow and hip_mid) else None
-            dress_len_px = self._euclid(neck_hollow, floor_mid) if (neck_hollow and floor_mid) else None
+        if self._vis_ok(pLhip, pRhip, pLank, pRank, thr=0.3):
+            crotch = self._mid((pLhip[0], pLhip[1]), (pRhip[0], pRhip[1]))
+            ankle_mid = self._mid((pLank[0], pLank[1]), (pRank[0], pRank[1]))
+            inseam_px = self._euclid(crotch, ankle_mid)
+        else:
+            inseam_px = None
 
-            # Circumferences (ellipse)
-            chest_circ_px = self._ellipse_c_from_width(chest_px, dr["chest"])
-            waist_circ_px = self._ellipse_c_from_width(waist_px, dr["waist"])
-            hip_circ_px = self._ellipse_c_from_width(hip_px, dr["hip"])
-            thigh_circ_px = self._ellipse_c_from_width(thigh_width_px, dr["thigh"])
-            uarm_circ_px = self._ellipse_c_from_width(upper_arm_width_px, dr["upper_arm"])
+        if self._vis_ok(pLsho, pRsho, thr=0.3):
+            neck_hollow = self._mid((pLsho[0], pLsho[1]), (pRsho[0], pRsho[1]))
+            neck_hollow = (neck_hollow[0], neck_hollow[1] + 0.06 * abs(pLsho[1] - pRsho[1]))
+        else:
+            neck_hollow = None
 
-            if uarm_circ_px is not None and chest_circ_px is not None:
-                uarm_circ_px = self._clamp(uarm_circ_px, lo=0.22 * chest_circ_px, hi=0.45 * chest_circ_px)
-            if thigh_circ_px is not None and hip_circ_px is not None:
-                thigh_circ_px = self._clamp(thigh_circ_px, lo=0.50 * hip_circ_px, hi=0.90 * hip_circ_px)
+        hip_mid = (
+            self._mid((pLhip[0], pLhip[1]), (pRhip[0], pRhip[1]))
+            if self._vis_ok(pLhip, pRhip, thr=0.3) else None
+        )
+        floor_mid = (
+            self._mid((pLhel[0], pLhel[1]), (pRhel[0], pRhel[1]))
+            if self._vis_ok(pLhel, pRhel, thr=0.3) else None
+        )
 
-            def conv(x):
-                return self._px_to_cm(x, cm_per_px)
+        top_len_px = self._euclid(neck_hollow, hip_mid) if (neck_hollow and hip_mid) else None
+        dress_len_px = self._euclid(neck_hollow, floor_mid) if (neck_hollow and floor_mid) else None
 
-            return {
-                "engine": "mediapipe",
-                "scale": {
-                    "pixel_height_est": px_height,
-                    "cm_per_px": cm_per_px,
-                    "bmi": bmi,
-                    "depth_ratios": dr,
-                },
-                "circumferences_cm": {
-                    "chest": conv(chest_circ_px),
-                    "waist": conv(waist_circ_px),
-                    "hip": conv(hip_circ_px),
-                    "thigh": conv(thigh_circ_px),
-                    "upper_arm": conv(uarm_circ_px),
-                },
-                "lengths_cm": {
-                    "pants_outseam": conv(outseam_px),
-                    "sleeve": conv(sleeve_px),
-                    "top_from_neck_hollow_to_hip": conv(top_len_px),
-                    "dress_from_neck_hollow_to_floor": conv(dress_len_px),
-                    "inseam_opt": conv(inseam_px),
-                },
-                "debug": {
-                    "shoulder_width_px": shoulder_px,
-                    "chest_width_px": chest_px,
-                    "pelvis_core_px": pelvis_core_px,
-                    "waist_width_px": waist_px,
-                    "hip_width_px": hip_px,
-                    "thigh_width_px": thigh_width_px,
-                    "upper_arm_width_px": upper_arm_width_px,
-                },
-            }, res
+        # Circumferences (ellipse)
+        chest_circ_px = self._ellipse_c_from_width(chest_px, dr["chest"])
+        waist_circ_px = self._ellipse_c_from_width(waist_px, dr["waist"])
+        hip_circ_px = self._ellipse_c_from_width(hip_px, dr["hip"])
+        thigh_circ_px = self._ellipse_c_from_width(thigh_width_px, dr["thigh"])
+        uarm_circ_px = self._ellipse_c_from_width(upper_arm_width_px, dr["upper_arm"])
+
+        if uarm_circ_px is not None and chest_circ_px is not None:
+            uarm_circ_px = self._clamp(uarm_circ_px, lo=0.22 * chest_circ_px, hi=0.45 * chest_circ_px)
+        if thigh_circ_px is not None and hip_circ_px is not None:
+            thigh_circ_px = self._clamp(thigh_circ_px, lo=0.50 * hip_circ_px, hi=0.90 * hip_circ_px)
+
+        def conv(x):
+            return self._px_to_cm(x, cm_per_px)
+
+        return {
+            "engine": "mediapipe",
+            "scale": {
+                "pixel_height_est": px_height,
+                "cm_per_px": cm_per_px,
+                "bmi": bmi,
+                "depth_ratios": dr,
+            },
+            "circumferences_cm": {
+                "chest": conv(chest_circ_px),
+                "waist": conv(waist_circ_px),
+                "hip": conv(hip_circ_px),
+                "thigh": conv(thigh_circ_px),
+                "upper_arm": conv(uarm_circ_px),
+            },
+            "lengths_cm": {
+                "pants_outseam": conv(outseam_px),
+                "sleeve": conv(sleeve_px),
+                "top_from_neck_hollow_to_hip": conv(top_len_px),
+                "dress_from_neck_hollow_to_floor": conv(dress_len_px),
+                "inseam_opt": conv(inseam_px),
+            },
+            "debug": {
+                "shoulder_width_px": shoulder_px,
+                "chest_width_px": chest_px,
+                "pelvis_core_px": pelvis_core_px,
+                "waist_width_px": waist_px,
+                "hip_width_px": hip_px,
+                "thigh_width_px": thigh_width_px,
+                "upper_arm_width_px": upper_arm_width_px,
+            },
+        }, res
 
     @staticmethod
     def _load_rgb(path: Union[str, Path]) -> np.ndarray:
@@ -388,35 +420,54 @@ class MediaPipeSingleMeasurer:
         image_front: Union[str, Path],
         image_armsup: Optional[Union[str, Path]] = None,
         image_side: Optional[Union[str, Path]] = None,
+        image_back: Optional[Union[str, Path]] = None,
+        image_front_t: Optional[Union[str, Path]] = None,
     ) -> Dict[str, Any]:
         """
         Measure from image paths.
 
+        Supports 4-pose flow: Front A-Pose, Side, Back A-Pose, Front T-Pose.
+        Legacy 3-image args (image_armsup) are still accepted for backward compat.
+
         Args:
-            image_front: Front view image path
-            image_armsup: Arms-up view image path (optional)
-            image_side: Side view image path (optional)
+            image_front: Front A-Pose image path
+            image_armsup: Legacy arms-up image path (optional, deprecated)
+            image_side: Side pose image path (optional)
+            image_back: Back A-Pose image path (optional)
+            image_front_t: Front T-Pose image path (optional)
 
         Returns:
             Dictionary with measurements for each view
         """
         out: Dict[str, Any] = {}
 
-        # Front
+        # Front A-Pose
         rgb_front = self._load_rgb(image_front)
         out_front, res_front = self.measure_rgb(rgb_front)
-        out["front"] = out_front
+        out["front_a"] = out_front
 
-        # Arms-up
-        if image_armsup:
-            rgb_armsup = self._load_rgb(image_armsup)
-            out_arm, _ = self.measure_rgb(rgb_armsup)
-            out["armsup"] = out_arm
-
-        # Side
+        # Side Pose
         if image_side:
             rgb_side = self._load_rgb(image_side)
             side_out, _ = self.measure_rgb(rgb_side)
             out["side"] = side_out
+
+        # Back A-Pose
+        if image_back:
+            rgb_back = self._load_rgb(image_back)
+            back_out, _ = self.measure_rgb(rgb_back)
+            out["back_a"] = back_out
+
+        # Front T-Pose
+        if image_front_t:
+            rgb_front_t = self._load_rgb(image_front_t)
+            front_t_out, _ = self.measure_rgb(rgb_front_t)
+            out["front_t"] = front_t_out
+
+        # Legacy: arms-up (backward compat)
+        if image_armsup and not image_front_t:
+            rgb_armsup = self._load_rgb(image_armsup)
+            out_arm, _ = self.measure_rgb(rgb_armsup)
+            out["armsup"] = out_arm
 
         return out

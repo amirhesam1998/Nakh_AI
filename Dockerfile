@@ -1,12 +1,20 @@
 # Multi-stage Dockerfile for Nakh FastAPI Application
 
 # Stage 1: Build stage
-FROM python:3.11-slim as builder
+FROM python:3.11-slim-bookworm AS builder
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Switch to accessible mirror
+RUN sed -i 's|http://deb.debian.org|http://mirror.arvancloud.ir|g' /etc/apt/sources.list.d/*.sources 2>/dev/null; \
+    sed -i 's|http://deb.debian.org|http://mirror.arvancloud.ir|g' /etc/apt/sources.list 2>/dev/null; \
+    true
+
+# Force-downgrade base libs to match stale mirror, then install build deps
+RUN apt-get -o Acquire::Check-Valid-Until=false update && \
+    apt-get install -y --allow-downgrades \
+    libc6=2.36-9+deb12u13 libssl3=3.0.18-1~deb12u2 && \
+    apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     libgl1-mesa-glx \
@@ -18,12 +26,18 @@ COPY requirements.txt .
 RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
 
 # Stage 2: Production stage
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Switch to accessible mirror
+RUN sed -i 's|http://deb.debian.org|http://mirror.arvancloud.ir|g' /etc/apt/sources.list.d/*.sources 2>/dev/null; \
+    sed -i 's|http://deb.debian.org|http://mirror.arvancloud.ir|g' /etc/apt/sources.list 2>/dev/null; \
+    true
+
+# Install runtime dependencies (allow downgrades to align with stale mirror)
+RUN apt-get -o Acquire::Check-Valid-Until=false update && \
+    apt-get install -y --no-install-recommends --allow-downgrades \
     libpq5 \
     libgl1-mesa-glx \
     libglib2.0-0 \

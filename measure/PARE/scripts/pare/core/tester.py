@@ -385,7 +385,7 @@ class PARETester:
             frames = dataset.frames
             has_keypoints = True if joints2d is not None else False
 
-            dataloader = DataLoader(dataset, batch_size=self.args.batch_size, num_workers=8)
+            dataloader = DataLoader(dataset, batch_size=self.args.batch_size, num_workers=0)
 
             pred_cam, pred_verts, pred_pose, pred_betas, \
             pred_joints3d, smpl_joints2d, norm_joints2d = [], [], [], [], [], [], []

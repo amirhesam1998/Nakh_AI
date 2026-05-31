@@ -95,15 +95,19 @@ app = FastAPI(
 )
 
 # Add middleware
+# In debug mode, allow any origin so local frontends on arbitrary ports work.
+# In production, restrict to the origins listed in CORS_ORIGINS.
+_cors_origins = ["*"] if settings.debug else settings.cors_origins_list
 app.add_middleware(
-      CORSMiddleware,
-      allow_origins=["*"],
-      allow_credentials=False,
-      allow_methods=["*"],
-      allow_headers=["*"],
-  )
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# app.add_middleware(RateLimitMiddleware)
+if settings.rate_limit_enabled:
+    app.add_middleware(RateLimitMiddleware)
 
 if settings.debug:
     app.add_middleware(RequestLoggingMiddleware)
@@ -132,7 +136,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
-        port=8002,
+        host=settings.server_host,
+        port=settings.server_port,
         reload=settings.debug,
     )

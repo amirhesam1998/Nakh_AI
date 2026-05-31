@@ -10,6 +10,13 @@ class QuestionnaireSystem {
     // Flow map loaded from /fake.json
     this.flowMap = {};
 
+    // CMS category tree (loaded dynamically)
+    this.cmsCategories = [];
+
+    // AI size recommendation cache
+    this._sizeRecommendation = null;
+    this._sizesLoaded = false;
+
     // DOM Elements - using jQuery
     this.$stepLabel = $("#stepLabel");
     this.$progressBar = $("#progressBar");
@@ -57,6 +64,10 @@ class QuestionnaireSystem {
           this.currentStep = 0;
           this.answers = {};
           this.renderCurrentStep();
+
+          // After loading static flows, fetch live data from CMS
+          this.loadCmsCategories();
+          this.loadFacets();
         } catch (e) {
           console.error("Parsing fake.json failed:", e);
           this.showError("خطا در پردازش دادهٔ .");
@@ -70,6 +81,400 @@ class QuestionnaireSystem {
         this.answers = {};
         this.renderCurrentStep();
         this.showError("عدم امکان بارگذاری داده ");
+      });
+  }
+
+  /**
+   * Fetch category tree from CMS and inject into questionnaire flows.
+   * Replaces the hardcoded garmentType/fabricType options with real
+   * sub-categories from the store database.
+   */
+  loadCmsCategories() {
+    var headers = {};
+    if (window.API_CONFIG && window.API_CONFIG.API_KEY) {
+      headers["x-api-key"] = window.API_CONFIG.API_KEY;
+    }
+    $.ajax({
+      url: apiUrl("/categories/questionnaire", "primary"),
+      method: "GET",
+      headers: headers,
+      dataType: "json",
+      timeout: 10000,
+    })
+      .done((resp) => {
+        var cats = resp.data || resp || [];
+        if (!Array.isArray(cats) || cats.length === 0) return;
+        this.cmsCategories = cats;
+        this._injectCmsCategories();
+        // Re-render if user is still on step 0
+        if (this.currentStep <= 1) this.renderCurrentStep();
+      })
+      .fail((xhr, status, err) => {
+        console.warn("CMS categories unavailable, using static options:", status, err);
+      });
+  }
+
+  /**
+   * Walk the CMS category tree and replace garmentType / fabricType
+   * question options in each audience flow.
+   *
+   * Expected CMS tree example:
+   *   [ { slug: "poshak", title: "پوشاک", children: [
+   *       { slug: "men", title: "مردانه", children: [
+   *           { slug: "shirt", title: "پیراهن" }, ...
+   *       ]},
+   *       { slug: "women", title: "زنانه", children: [...] },
+   *     ]},
+   *     { slug: "parche", title: "پارچه", children: [...] },
+   *   ]
+   */
+  _injectCmsCategories() {
+    if (!this.cmsCategories.length) return;
+
+    // Keywords to match audience groups to CMS sub-categories
+    var audienceKeywords = {
+      male:   ["مردانه", "مرد", "men", "male"],
+      female: ["زنانه", "زن", "women", "female"],
+      kids:   ["بچگانه", "بچه", "کودک", "kids", "children"],
+      unisex: ["یونیسکس", "unisex"],
+    };
+
+    // Detect which top-level is garment vs fabric
+    var garmentCat = null, fabricCat = null;
+    for (var i = 0; i < this.cmsCategories.length; i++) {
+      var c = this.cmsCategories[i];
+      var sl = (c.slug || "").toLowerCase();
+      var tl = (c.title || "").toLowerCase();
+      if (sl.indexOf("garment") !== -1 || sl.indexOf("poshak") !== -1 ||
+          tl.indexOf("پوشاک") !== -1 || tl.indexOf("لباس") !== -1) {
+        garmentCat = c;
+      } else if (sl.indexOf("fabric") !== -1 || sl.indexOf("parche") !== -1 ||
+                 tl.indexOf("پارچه") !== -1) {
+        fabricCat = c;
+      }
+    }
+
+    // Inject garment categories
+    if (garmentCat && this.flowMap.garment) {
+      this._injectForCategory(garmentCat, "garment", "garmentType", audienceKeywords);
+    }
+
+    // Inject fabric categories
+    if (fabricCat && this.flowMap.fabric) {
+      this._injectForCategory(fabricCat, "fabric", "fabricType", audienceKeywords,
+        { male: "male1", female: "female1", kids: "kids1", unisex: "unisex1" });
+    }
+  }
+
+  /**
+   * For a given top-level CMS category, find audience sub-categories
+   * and replace the target question's options with real sub-category titles.
+   */
+  _injectForCategory(cmsCat, flowKey, questionId, audienceKeywords, audienceMap) {
+    audienceMap = audienceMap || { male: "male", female: "female", kids: "kids", unisex: "unisex" };
+    var children = cmsCat.children || [];
+
+    Object.keys(audienceKeywords).forEach((audience) => {
+      var flowAudienceKey = audienceMap[audience];
+      if (!this.flowMap[flowKey] || !this.flowMap[flowKey][flowAudienceKey]) return;
+
+      var keywords = audienceKeywords[audience];
+
+      // Find the matching CMS audience sub-category
+      var matchedGroup = null;
+      for (var i = 0; i < children.length; i++) {
+        var child = children[i];
+        var title = (child.title || "").toLowerCase();
+        var slug  = (child.slug || "").toLowerCase();
+        for (var k = 0; k < keywords.length; k++) {
+          if (title.indexOf(keywords[k].toLowerCase()) !== -1 ||
+              slug.indexOf(keywords[k].toLowerCase()) !== -1) {
+            matchedGroup = child;
+            break;
+          }
+        }
+        if (matchedGroup) break;
+      }
+
+      if (!matchedGroup || !matchedGroup.children || matchedGroup.children.length === 0) return;
+
+      // Build options from the CMS children (these are the actual product types)
+      var options = matchedGroup.children.map(function (sub) {
+        return { value: sub.slug, label: sub.title };
+      });
+
+      // Find the target question in the flow and replace its options
+      var flowQuestions = this.flowMap[flowKey][flowAudienceKey];
+      for (var q = 0; q < flowQuestions.length; q++) {
+        if (flowQuestions[q].id === questionId) {
+          flowQuestions[q].options = options;
+          // Switch to radio for better UX if there are many options
+          if (options.length > 0 && options.length <= 12) {
+            flowQuestions[q].type = "radio";
+          } else if (options.length > 12) {
+            // Too many options — use select dropdown
+            flowQuestions[q].type = "select";
+            options.unshift({ value: "", label: "انتخاب کنید…" });
+          }
+          break;
+        }
+      }
+    });
+
+    // Also inject as top-level options if no audience grouping in CMS
+    // (e.g. the top-level category directly contains product types without gender split)
+    if (children.length > 0) {
+      var hasAudienceGroups = false;
+      Object.keys(audienceKeywords).forEach(function (aud) {
+        var kws = audienceKeywords[aud];
+        children.forEach(function (ch) {
+          var t = (ch.title || "").toLowerCase();
+          var s = (ch.slug || "").toLowerCase();
+          kws.forEach(function (kw) {
+            if (t.indexOf(kw.toLowerCase()) !== -1 || s.indexOf(kw.toLowerCase()) !== -1) {
+              hasAudienceGroups = true;
+            }
+          });
+        });
+      });
+
+      // If CMS has no audience grouping, inject all children into all audience flows
+      if (!hasAudienceGroups) {
+        var opts = children.map(function (sub) {
+          return { value: sub.slug, label: sub.title };
+        });
+        Object.keys(audienceMap).forEach((aud) => {
+          var fk = audienceMap[aud];
+          if (!this.flowMap[flowKey] || !this.flowMap[flowKey][fk]) return;
+          var fqs = this.flowMap[flowKey][fk];
+          for (var q = 0; q < fqs.length; q++) {
+            if (fqs[q].id === questionId) {
+              fqs[q].options = opts.slice();
+              break;
+            }
+          }
+        });
+      }
+    }
+  }
+
+  /**
+   * Load available sizes from CMS for a given category slug,
+   * then fetch AI size recommendation from the Python backend.
+   */
+  loadDynamicSizes(categorySlug) {
+    if (!categorySlug) return;
+
+    this._sizesLoaded = false;
+    this._sizeRecommendation = null;
+
+    var headers = {};
+    if (window.API_CONFIG && window.API_CONFIG.API_KEY) {
+      headers["x-api-key"] = window.API_CONFIG.API_KEY;
+    }
+
+    $.ajax({
+      url: apiUrl("/categories/" + encodeURIComponent(categorySlug) + "/sizes", "primary"),
+      method: "GET",
+      headers: headers,
+      dataType: "json",
+      timeout: 10000,
+    })
+      .done((resp) => {
+        var sizes = (resp && resp.data) || [];
+        if (!Array.isArray(sizes) || sizes.length === 0) {
+          console.warn("No sizes found for category:", categorySlug);
+          return;
+        }
+
+        // Update the size question options in all relevant flows
+        this._updateSizeOptions(sizes);
+        this._sizesLoaded = true;
+
+        // Re-render if user is currently on the size question
+        var currentQ = this.questions[this.currentStep];
+        if (currentQ && currentQ.id === "size") {
+          this.renderCurrentStep();
+        }
+
+        // Now fetch AI recommendation
+        this._fetchSizeRecommendation(sizes.map(function (s) { return s.value; }));
+      })
+      .fail(function (xhr, status, err) {
+        console.warn("Failed to load sizes from CMS:", status, err);
+      });
+  }
+
+  /**
+   * Replace size question options in the current question flow.
+   */
+  _updateSizeOptions(sizeOptions) {
+    // Update in the active questions array
+    for (var i = 0; i < this.questions.length; i++) {
+      if (this.questions[i].id === "size") {
+        var opts = [{ value: "", label: "انتخاب کنید…" }].concat(sizeOptions);
+        this.questions[i].options = opts;
+        this.questions[i].type = sizeOptions.length <= 10 ? "radio" : "select";
+        break;
+      }
+    }
+
+    // Also update in flowMap so rebuilds preserve the dynamic sizes
+    if (this.flowMap) {
+      var self = this;
+      Object.keys(this.flowMap).forEach(function (flowKey) {
+        var flow = self.flowMap[flowKey];
+        if (Array.isArray(flow)) {
+          self._updateSizeInArray(flow, sizeOptions);
+        } else if (typeof flow === "object") {
+          Object.keys(flow).forEach(function (subKey) {
+            if (Array.isArray(flow[subKey])) {
+              self._updateSizeInArray(flow[subKey], sizeOptions);
+            }
+          });
+        }
+      });
+    }
+  }
+
+  _updateSizeInArray(questionsArray, sizeOptions) {
+    for (var i = 0; i < questionsArray.length; i++) {
+      if (questionsArray[i].id === "size") {
+        var opts = [{ value: "", label: "انتخاب کنید…" }].concat(sizeOptions);
+        questionsArray[i].options = opts;
+        questionsArray[i].type = sizeOptions.length <= 10 ? "radio" : "select";
+        break;
+      }
+    }
+  }
+
+  /**
+   * Load dynamic facet values (style, occasion, season) from the CMS.
+   * Replaces static options in all flows with real database values.
+   */
+  loadFacets() {
+    var headers = {};
+    if (window.API_CONFIG && window.API_CONFIG.API_KEY) {
+      headers["x-api-key"] = window.API_CONFIG.API_KEY;
+    }
+
+    var self = this;
+    $.ajax({
+      url: apiUrl("/products/facets?fields=style,occasion,season", "primary"),
+      method: "GET",
+      headers: headers,
+      dataType: "json",
+      timeout: 10000,
+    })
+      .done(function (resp) {
+        var data = resp && resp.data ? resp.data : {};
+        if (data.style && data.style.length > 0) {
+          self._injectFacetOptions("style", data.style);
+        }
+        if (data.occasion && data.occasion.length > 0) {
+          self._injectFacetOptions("occasion", data.occasion);
+        }
+        if (data.season && data.season.length > 0) {
+          self._injectFacetOptions("season", data.season);
+        }
+        // Re-render if user is still on an early step
+        if (self.currentStep <= 2) self.renderCurrentStep();
+      })
+      .fail(function (xhr, status, err) {
+        console.warn("CMS facets unavailable, using static options:", status, err);
+      });
+  }
+
+  /**
+   * Replace options for a given question ID across all flows.
+   */
+  _injectFacetOptions(questionId, options) {
+    var self = this;
+
+    // Update active questions
+    for (var i = 0; i < this.questions.length; i++) {
+      if (this.questions[i].id === questionId) {
+        this.questions[i].options = options;
+        if (options.length <= 8) {
+          // Use checkbox for style (multi-select), radio for others
+          this.questions[i].type = (questionId === "style") ? "checkbox" : "radio";
+        } else {
+          this.questions[i].type = "select";
+          if (options[0] && options[0].value !== "") {
+            options.unshift({ value: "", label: "انتخاب کنید…" });
+          }
+        }
+        break;
+      }
+    }
+
+    // Update in flowMap so rebuilds also get dynamic values
+    if (!this.flowMap) return;
+    Object.keys(this.flowMap).forEach(function (flowKey) {
+      var flow = self.flowMap[flowKey];
+      if (Array.isArray(flow)) {
+        self._injectFacetInArray(flow, questionId, options);
+      } else if (typeof flow === "object") {
+        Object.keys(flow).forEach(function (subKey) {
+          if (Array.isArray(flow[subKey])) {
+            self._injectFacetInArray(flow[subKey], questionId, options);
+          }
+        });
+      }
+    });
+  }
+
+  _injectFacetInArray(questionsArray, questionId, options) {
+    for (var i = 0; i < questionsArray.length; i++) {
+      if (questionsArray[i].id === questionId) {
+        questionsArray[i].options = options.slice();
+        if (options.length <= 8) {
+          questionsArray[i].type = (questionId === "style") ? "checkbox" : "radio";
+        } else {
+          questionsArray[i].type = "select";
+        }
+        break;
+      }
+    }
+  }
+
+  /**
+   * Fetch AI size recommendation from the Python backend.
+   */
+  _fetchSizeRecommendation(availableSizes) {
+    var urlParams = new URLSearchParams(window.location.search);
+    var uploadId = urlParams.get("upload_id");
+    if (!uploadId || !availableSizes || availableSizes.length === 0) return;
+
+    var authHeaders = { "Content-Type": "application/json" };
+    var savedToken = localStorage.getItem("auth_token");
+    if (savedToken) {
+      authHeaders["Authorization"] = "Bearer " + savedToken;
+    }
+
+    var self = this;
+    $.ajax({
+      url: apiUrl("/recommendations/size-recommendation", "secondary"),
+      method: "POST",
+      headers: authHeaders,
+      contentType: "application/json",
+      data: JSON.stringify({
+        upload_id: uploadId,
+        available_sizes: availableSizes,
+      }),
+      dataType: "json",
+      timeout: 15000,
+    })
+      .done(function (resp) {
+        self._sizeRecommendation = resp;
+        // Re-render if user is on the size question
+        var currentQ = self.questions[self.currentStep];
+        if (currentQ && currentQ.id === "size") {
+          self.renderCurrentStep();
+        }
+      })
+      .fail(function (xhr, status, err) {
+        console.warn("Failed to get size recommendation:", status, err);
       });
   }
 
@@ -94,18 +499,44 @@ class QuestionnaireSystem {
     // همیشه از initialQuestions شروع کن (clone)
     const base = this.initialQuestions.map((q) => Object.assign({}, q));
 
-    if (
-      categoryValue &&
-      this.flowMap &&
-      Array.isArray(this.flowMap[categoryValue])
-    ) {
-      const flowQuestions = this.flowMap[categoryValue].map((q) =>
-        Object.assign({}, q)
-      );
-      return base.concat(flowQuestions);
-    } else {
+    if (!categoryValue || !this.flowMap || !this.flowMap[categoryValue]) {
       return base;
     }
+
+    const flowEntry = this.flowMap[categoryValue];
+
+    // If flowEntry is an array, use it directly
+    if (Array.isArray(flowEntry)) {
+      return base.concat(flowEntry.map((q) => Object.assign({}, q)));
+    }
+
+    // If flowEntry is an object with gender sub-keys, add a gender question
+    if (typeof flowEntry === "object") {
+      const genderKeys = Object.keys(flowEntry);
+      const genderQuestion = {
+        id: "_audience",
+        label: "برای چه کسی می‌خواهید؟",
+        type: "radio",
+        required: true,
+        options: genderKeys.map((k) => {
+          const labels = {
+            male: "مردانه", female: "زنانه", kids: "بچه‌گانه", unisex: "یونیسکس",
+            male1: "مردانه", female1: "زنانه", kids1: "بچه‌گانه", unisex1: "یونیسکس",
+          };
+          return { value: k, label: labels[k] || k };
+        }),
+      };
+      const withGender = base.concat([genderQuestion]);
+
+      // If audience already answered, append the sub-flow questions
+      const audience = this.answers["_audience"];
+      if (audience && Array.isArray(flowEntry[audience])) {
+        return withGender.concat(flowEntry[audience].map((q) => Object.assign({}, q)));
+      }
+      return withGender;
+    }
+
+    return base;
   }
 
   // حذف پاسخ‌هایی که دیگر مرتبط نیستند
@@ -133,7 +564,8 @@ class QuestionnaireSystem {
       this.$nextBtn.prop("disabled", true);
       return;
     }
-
+    console.log(this.questions);
+    
     // اطمینان از اینکه currentStep در محدوده است
     if (this.currentStep < 0) this.currentStep = 0;
     if (this.currentStep > this.questions.length - 1)
@@ -172,14 +604,44 @@ class QuestionnaireSystem {
       question.required ? ' <span class="required">*</span>' : ""
     }</label>`;
 
+    // Show AI size recommendation banner for the size question
+    if (question.id === "size" && this._sizeRecommendation && this._sizeRecommendation.recommended_size) {
+      var rec = this._sizeRecommendation;
+      var confLabel = rec.confidence === "high" ? "اطمینان بالا" : (rec.confidence === "medium" ? "اطمینان متوسط" : "تقریبی");
+      var confClass = rec.confidence === "high" ? "high" : (rec.confidence === "medium" ? "medium" : "low");
+      html += `<div class="ai-size-recommendation ${confClass}">`;
+      html += `<div class="ai-rec-icon">&#x1F4D0;</div>`;
+      html += `<div class="ai-rec-content">`;
+      html += `<strong>پیشنهاد هوش مصنوعی: سایز ${rec.recommended_size}</strong>`;
+      html += `<span class="ai-rec-confidence">(${confLabel})</span>`;
+      if (rec.details) {
+        var parts = [];
+        if (rec.details.chest) parts.push("سینه: " + rec.details.chest);
+        if (rec.details.waist) parts.push("کمر: " + rec.details.waist);
+        if (rec.details.hip) parts.push("باسن: " + rec.details.hip);
+        if (parts.length > 0) {
+          html += `<div class="ai-rec-details">${parts.join(" | ")}</div>`;
+        }
+      }
+      html += `<div class="ai-rec-note">شما می‌توانید سایز دیگری انتخاب کنید</div>`;
+      html += `</div></div>`;
+    }
+
     switch (question.type) {
       case "radio":
         html += `<div class="options-container">`;
         question.options.forEach((option) => {
+          var isRecommended = question.id === "size" &&
+            this._sizeRecommendation &&
+            this._sizeRecommendation.recommended_size &&
+            option.value &&
+            option.value.toUpperCase() === this._sizeRecommendation.recommended_size.toUpperCase();
+          var extraClass = isRecommended ? " ai-recommended" : "";
+          var badge = isRecommended ? '<span class="ai-badge">AI</span>' : "";
           html += `
-            <label class="option-item">
+            <label class="option-item${extraClass}">
               <input type="radio" name="${question.id}" value="${option.value}" />
-              <span class="option-label">${option.label}</span>
+              <span class="option-label">${option.label}${badge}</span>
             </label>
           `;
         });
@@ -233,6 +695,20 @@ class QuestionnaireSystem {
   // Restore saved answer
   restoreSavedAnswer(question) {
     const savedAnswer = this.answers[question.id];
+
+    // Auto-select AI recommended size if no saved answer yet
+    if (savedAnswer == null && question.id === "size" && this._sizeRecommendation && this._sizeRecommendation.recommended_size) {
+      var rec = this._sizeRecommendation.recommended_size;
+      if (question.type === "radio") {
+        this.$questionContainer
+          .find(`input[type="radio"][name="size"][value="${rec}"]`)
+          .prop("checked", true);
+      } else if (question.type === "select") {
+        this.$questionContainer.find(`select[name="size"]`).val(rec);
+      }
+      return;
+    }
+
     if (savedAnswer == null) return;
 
     if (question.type === "radio") {
@@ -331,8 +807,13 @@ class QuestionnaireSystem {
     const question = this.questions[this.currentStep];
     this.answers[question.id] = answer;
 
-    // Handle category selection specially: بازسازی جریان بر اساس انتخاب
-    if (question.id === "category") {
+    // When user selects garmentType or fabricType, load dynamic sizes
+    if (question.id === "garmentType" || question.id === "fabricType") {
+      this.loadDynamicSizes(answer);
+    }
+
+    // Handle category or audience selection: rebuild the question flow
+    if (question.id === "category" || question.id === "_audience") {
       const sel = this.answers["category"];
       const newQuestions = this.rebuildQuestionsForCategory(sel);
 
@@ -493,6 +974,22 @@ class QuestionnaireSystem {
         if (this.currentStep > this.questions.length - 1) {
           this.currentStep = this.questions.length - 1;
         }
+      }
+      this.renderCurrentStep();
+    });
+
+    // When the user selects an audience (gender), rebuild flow to include sub-flow questions
+    $(document).on("change", "input[name='_audience']", (e) => {
+      const val = $(e.currentTarget).val();
+      this.answers["_audience"] = val;
+      const newQuestions = this.rebuildQuestionsForCategory(this.answers["category"]);
+      const allowedIds = newQuestions.map((q) => q.id);
+      this.pruneAnswers(allowedIds);
+      this.questions = newQuestions;
+      // Move to next question after audience selection
+      const audienceIdx = this.questions.findIndex((q) => q.id === "_audience");
+      if (audienceIdx >= 0 && audienceIdx < this.questions.length - 1) {
+        this.currentStep = audienceIdx + 1;
       }
       this.renderCurrentStep();
     });

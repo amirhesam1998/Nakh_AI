@@ -17,6 +17,23 @@ services:
       timeout: 5s
       retries: 5
 
+  # Laravel CMS (online shop). Build context lives in ./Nakh_CMS.
+  # NOTE: the Dockerfile for the CMS is not committed in this repo; supply your
+  # own (php-fpm + nginx, or a webdevops/php-nginx image) or point this service
+  # at an externally hosted CMS by removing it and setting SHOP_API_URL/
+  # ECOMMERCE_AUTH_URL accordingly.
+  nakh-cms:
+    image: ${NAKH_CMS_IMAGE:-webdevops/php-nginx:8.2}
+    container_name: nakh-cms
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ./Nakh_CMS:/app
+    environment:
+      - WEB_DOCUMENT_ROOT=/app/public
+    ports:
+      - "8000:80"
+
   # FastAPI Application
   api:
     build:
@@ -30,14 +47,20 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      # Reach the CMS by docker service name, not 127.0.0.1.
+      - SHOP_API_URL=http://nakh-cms
+      - ECOMMERCE_AUTH_URL=http://nakh-cms/api/v1/user
+      - SERVER_PORT=8000
     volumes:
       - media_data:/app/media
       - logs_data:/app/logs
     ports:
-      - "8000:8000"
+      - "8002:8000"
     depends_on:
       redis:
         condition: service_healthy
+      nakh-cms:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s
@@ -59,6 +82,8 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - CELERY_ENABLED=True
+      - SHOP_API_URL=http://nakh-cms
+      - ECOMMERCE_AUTH_URL=http://nakh-cms/api/v1/user
     volumes:
       - media_data:/app/media
       - logs_data:/app/logs

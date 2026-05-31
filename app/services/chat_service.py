@@ -12,10 +12,29 @@ Storage: JSON files under media/chat/ (no Redis required).
 """
 import json
 import logging
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Per-message cap. Anything longer is truncated before storage / prompting.
+_MAX_USER_MESSAGE_CHARS = 2000
+
+# Drop chat-template delimiter sequences from user input so a hostile user
+# cannot pretend to be the system role or end the turn early.
+_PROMPT_DELIMITER_RE = re.compile(r"<\|[^|>]{0,40}\|>")
+
+
+def _sanitize_user_message(text: str) -> str:
+    """Cap length and strip chat-template control tokens from user input."""
+    if not isinstance(text, str):
+        text = str(text or "")
+    text = _PROMPT_DELIMITER_RE.sub("", text)
+    text = text.replace("```", "´´´")
+    if len(text) > _MAX_USER_MESSAGE_CHARS:
+        text = text[: _MAX_USER_MESSAGE_CHARS - 1] + "…"
+    return text
 
 from app.config import settings
 from app.schemas.chat import (
@@ -198,9 +217,11 @@ class ChatService:
 
         self.context_builder.language = session.preferred_language
 
+        safe_message = _sanitize_user_message(message)
+
         user_msg = ChatMessage(
             role=MessageRole.USER,
-            content=message,
+            content=safe_message,
             timestamp=datetime.utcnow(),
         )
         await self._store_message(session.session_id, user_msg)
@@ -227,11 +248,11 @@ class ChatService:
         await self._update_session_count(session.session_id)
 
         recommendations = []
-        if self._should_recommend_products(message, assistant_text):
+        if self._should_recommend_products(safe_message, assistant_text):
             recommendations = await product_service.get_recommendations(
                 measurements=measurements,
                 preferences=preferences,
-                conversation_context=f"{message}\n{assistant_text}",
+                conversation_context=f"{safe_message}\n{assistant_text}",
                 limit=3,
             )
 

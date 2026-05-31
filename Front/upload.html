@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>upload page</title>
     <link rel="stylesheet" href="/css/mainlog.css" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <!-- <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&display=swap"
@@ -15,7 +15,7 @@
     <link
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0"
-    />
+    /> -->
     <link rel="stylesheet" href="/fonts/remixicon.css" />
   </head>
   <body>
@@ -34,34 +34,44 @@
         <form method="post" enctype="multipart/form-data">
           <div class="form-data-upload">
             <div class="upload-grid">
-              <!-- Upload Area 1 -->
+              <!-- Upload Area 1: Front A-Pose -->
               <div class="upload-area" id="uploadArea1" data-input="photo1">
                 <div class="upload-content">
                   <i class="ri-image-add-line upload-icon"></i>
-                  <p class="upload-text">عکس جلو</p>
-                  <span class="upload-hint">کلیک کنید</span>
+                  <p class="upload-text">جلو (A-Pose)</p>
+                  <span class="upload-hint">دست‌ها کنار بدن</span>
                 </div>
                 <div class="image-preview-area" id="previewArea1"></div>
               </div>
 
-              <!-- Upload Area 2 -->
+              <!-- Upload Area 2: Side Pose -->
               <div class="upload-area" id="uploadArea2" data-input="photo2">
                 <div class="upload-content">
                   <i class="ri-image-add-line upload-icon"></i>
-                  <p class="upload-text">عکس پشت</p>
-                  <span class="upload-hint">کلیک کنید</span>
+                  <p class="upload-text">نیم‌رخ (کناری)</p>
+                  <span class="upload-hint">پروفایل کامل</span>
                 </div>
                 <div class="image-preview-area" id="previewArea2"></div>
               </div>
 
-              <!-- Upload Area 3 -->
+              <!-- Upload Area 3: Back A-Pose -->
               <div class="upload-area" id="uploadArea3" data-input="photo3">
                 <div class="upload-content">
                   <i class="ri-image-add-line upload-icon"></i>
-                  <p class="upload-text">عکس کناری</p>
-                  <span class="upload-hint">کلیک کنید</span>
+                  <p class="upload-text">پشت (A-Pose)</p>
+                  <span class="upload-hint">پشت به دوربین</span>
                 </div>
                 <div class="image-preview-area" id="previewArea3"></div>
+              </div>
+
+              <!-- Upload Area 4: Front T-Pose -->
+              <div class="upload-area" id="uploadArea4" data-input="photo4">
+                <div class="upload-content">
+                  <i class="ri-image-add-line upload-icon"></i>
+                  <p class="upload-text">جلو (T-Pose)</p>
+                  <span class="upload-hint">دست‌ها افقی</span>
+                </div>
+                <div class="image-preview-area" id="previewArea4"></div>
               </div>
             </div>
 
@@ -87,8 +97,35 @@
               accept="image/*"
               style="display: none"
             />
+            <input
+              id="photo4"
+              name="image4"
+              type="file"
+              accept="image/*"
+              style="display: none"
+            />
           </div>
           <div class="form-data-input">
+            <div class="textbox">
+              <select id="gender" name="gender" required>
+                <option value="" disabled selected></option>
+                <option value="male">مرد</option>
+                <option value="female">زن</option>
+              </select>
+              <label for="gender">جنسیت</label>
+            </div>
+            <div class="textbox">
+              <input
+                id="age"
+                name="age"
+                type="number"
+                step="1"
+                min="3"
+                max="120"
+                required
+              />
+              <label for="age">سن</label>
+            </div>
             <div class="textbox">
               <input
                 id="height_cm"
@@ -113,14 +150,6 @@
               />
               <label for="weight_kg">وزن (kg)</label>
             </div>
-            <div class="textbox">
-              <select id="gender" name="gender" required>
-                <option value="" disabled selected></option>
-                <option value="male">مرد</option>
-                <option value="female">زن</option>
-              </select>
-              <label for="gender">جنسیت</label>
-            </div>
             <button type="submit" id="upload-form-btn">
               آپلود و اندازه‌گیری
             </button>
@@ -138,11 +167,15 @@
         <h3 class="guidance-title">راهنمای عکس‌برداری</h3>
         <div class="guidance-content">
           <ul class="guidance-list">
-            <li>در محیطی با نور کافی عکس بگیرید</li>
-            <li>لباس‌های چسبان به بدن بپوشید</li>
-            <li>از فاصله مناسب (۲-۳ متری) عکس بگیرید</li>
-            <li>تمام بدن در قاب عکس باشد</li>
-            <li>در حالت ایستاده و صاف عکس بگیرید</li>
+            <li><strong>۴ عکس لازم است:</strong> جلو A-Pose، نیم‌رخ، پشت A-Pose، جلو T-Pose</li>
+            <li>در محیطی با نور یکنواخت عکس بگیرید (بدون سایه و نور پشتی)</li>
+            <li>لباس چسبان بپوشید (بدون کاپشن، هودی یا لباس گشاد)</li>
+            <li>از فاصله حدود ۲.۵ متری عکس بگیرید</li>
+            <li>دوربین در ارتفاع کمر قرار گیرد</li>
+            <li>تمام بدن (سر تا پا) در قاب عکس باشد</li>
+            <li>در A-Pose: دست‌ها کمی از بدن فاصله داشته، پاها ۱۵-۲۰ سانتی‌متر باز</li>
+            <li>در T-Pose: دست‌ها کاملاً افقی، کف دست‌ها رو به پایین</li>
+            <li>در نیم‌رخ: دست‌ها جلوی بدن را نپوشانند</li>
           </ul>
         </div>
         <button type="button" class="guidance-close-btn">بستن</button>

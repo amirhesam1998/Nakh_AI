@@ -1,14 +1,26 @@
 /.venv
 /.claude
-/app/api/__pycache__
-/app/__pycache__
-/app/api/__pycache__
-/app/__pycache__
-/app/core/__pycache__
-/app/schemas/__pycache__
-/app/services/__pycache__
-/app/services/llm/__pycache__
-/app/tasks/__pycache__
-/measure/__pycache__
 /media
 New Microsoft Word Document.docx
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+*.md
+User_Demographic_&_Body_Model_Classification_Update.md
+Final Low-Error Body Measurement Pipeline PARE + SMPL + Multi-View + Anthropometric Correction.md
+.claude/settings.local.json

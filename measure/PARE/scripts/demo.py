@@ -161,10 +161,14 @@ def main(args):
 
         results_pkl = os.path.join(output_path, "pare_output.pkl")
 
+        # Look for per-frame results: npz in output_path OR pkl in pare_results/
         saved_npzs = sorted(glob.glob(os.path.join(output_path, "*.npz")))
-        if saved_npzs:
-            logger.info(f"Found {len(saved_npzs)} frame results. Packing to {results_pkl} ...")
+        saved_pkls = sorted(glob.glob(os.path.join(output_path, "pare_results", "*.pkl")))
+
+        if saved_npzs or saved_pkls:
             pack = {1: {'verts': [], 'joints3d': [], 'pose': [], 'betas': []}}
+
+            # Pack from npz files
             for f in saved_npzs:
                 try:
                     d = np.load(f, allow_pickle=True)
@@ -173,7 +177,33 @@ def main(args):
                         if k_map[0] in d:
                             pack[1][k_map[1]].append(d[k_map[0]])
                 except Exception as e:
-                    logger.warning(f"Skip {f}: {e}")
+                    logger.warning(f"Skip npz {f}: {e}")
+
+            # Pack from per-image pkl files (folder mode output)
+            # Keys: smpl_vertices -> verts, smpl_joints3d -> joints3d,
+            #        pred_pose -> pose, pred_shape -> betas
+            for f in saved_pkls:
+                try:
+                    d = joblib.load(f)
+                    key_map = [
+                        ('smpl_vertices', 'verts'),
+                        ('smpl_joints3d', 'joints3d'),
+                        ('pred_pose', 'pose'),
+                        ('pred_shape', 'betas'),
+                    ]
+                    for src_key, dst_key in key_map:
+                        if src_key in d:
+                            val = d[src_key]
+                            if hasattr(val, 'shape') and len(val.shape) > 1:
+                                # Take first detection per image
+                                pack[1][dst_key].append(val[0])
+                            else:
+                                pack[1][dst_key].append(val)
+                except Exception as e:
+                    logger.warning(f"Skip pkl {f}: {e}")
+
+            total_frames = max(len(v) for v in pack[1].values()) if any(pack[1].values()) else 0
+            logger.info(f"Found {total_frames} frame results. Packing to {results_pkl} ...")
 
             for k in list(pack[1].keys()):
                 if len(pack[1][k]) > 0:
@@ -182,7 +212,7 @@ def main(args):
             joblib.dump(pack, results_pkl)
             logger.info(f"Saved packed results to: {results_pkl}")
 
-        # اگر npz پیدا نشد، تلاش دوم: از خود tester (بعضی نسخه‌ها نتایج را نگه می‌دارند)
+        # Fallback: try tester object
         elif hasattr(tester, 'results') and isinstance(tester.results, dict) and tester.results:
             joblib.dump(tester.results, results_pkl)
             logger.info(f"Saved tester.results to: {results_pkl}")

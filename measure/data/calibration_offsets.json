@@ -1,0 +1,38 @@
+{
+  "adult": {
+    "chest_circum_cm": 0.0,
+    "waist_circum_cm": 0.0,
+    "hip_circum_cm": 0.0,
+    "neck_circum_cm": 0.0,
+    "upperarm_circum_cm": 0.0,
+    "thigh_circum_cm": 0.0,
+    "calf_circum_cm": 0.0,
+    "sleeve_len_cm": 0.0,
+    "pants_outseam_cm": 0.0,
+    "shoulder_width_cm": 0.0
+  },
+  "teen": {
+    "chest_circum_cm": 0.0,
+    "waist_circum_cm": 0.0,
+    "hip_circum_cm": 0.0,
+    "neck_circum_cm": 0.0,
+    "upperarm_circum_cm": 0.0,
+    "thigh_circum_cm": 0.0,
+    "calf_circum_cm": 0.0,
+    "sleeve_len_cm": 0.0,
+    "pants_outseam_cm": 0.0,
+    "shoulder_width_cm": 0.0
+  },
+  "child": {
+    "chest_circum_cm": 0.0,
+    "waist_circum_cm": 0.0,
+    "hip_circum_cm": 0.0,
+    "neck_circum_cm": 0.0,
+    "upperarm_circum_cm": 0.0,
+    "thigh_circum_cm": 0.0,
+    "calf_circum_cm": 0.0,
+    "sleeve_len_cm": 0.0,
+    "pants_outseam_cm": 0.0,
+    "shoulder_width_cm": 0.0
+  }
+}

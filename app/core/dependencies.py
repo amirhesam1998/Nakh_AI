@@ -72,17 +72,23 @@ async def get_current_user(
     if cached:
         return cached
 
+    if not settings.ecommerce_auth_url:
+        logger.warning(
+            "ECOMMERCE_AUTH_URL is not configured; cannot validate Bearer token"
+        )
+        return None
+
     # Validate token against e-commerce service
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+    if settings.ecommerce_api_key:
+        headers["x-api-key"] = settings.ecommerce_api_key
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                settings.ecommerce_auth_url,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "x-api-key": settings.ecommerce_api_key,
-                    "Accept": "application/json",
-                },
-            )
+            response = await client.get(settings.ecommerce_auth_url, headers=headers)
     except Exception as e:
         logger.error(f"Failed to reach e-commerce auth service: {e}")
         return None

@@ -64,13 +64,16 @@ class Settings(BaseSettings):
     upload_expiry_seconds: int = 24 * 60 * 60
 
     # Allowed image extensions and MIME types
-    allowed_image_extensions: List[str] = [".jpg", ".jpeg", ".png", ".heic", ".heif"]
+    allowed_image_extensions: List[str] = [".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp"]
     allowed_image_mime_types: List[str] = [
         "image/jpeg",
         "image/png",
         "image/heic",
         "image/heif",
+        "image/webp",
     ]
+    # Minimum image resolution (width or height)
+    min_image_resolution: int = 480
 
     # LLM Configuration
     llm_enabled: bool = True
@@ -86,13 +89,20 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
 
     # External Shop API (for product recommendations)
-    shop_api_url: str = ""  # URL to PHP shop API
-    shop_api_key: str = ""  # API key for authentication
+    # In Docker, set SHOP_API_URL to the Laravel service name (e.g. http://nakh-cms:80).
+    shop_api_url: str = ""
+    shop_api_key: str = ""
 
-    # E-commerce auth proxy (validate tokens against the main e-commerce service)
-    ecommerce_auth_url: str = "http://127.0.0.1:8000/api/v1/user"
-    ecommerce_api_key: str = "6p0RiczKIsIJV4SO5wGBnO1lssTWPhRnq5wm1gXq"
-    auth_cache_ttl_seconds: int = 300  # Cache validated tokens for 5 minutes
+    # E-commerce auth proxy (validate Sanctum tokens against the Laravel CMS).
+    # Leave empty to disable the auth proxy and treat tokens as opaque session IDs.
+    # In Docker, set ECOMMERCE_AUTH_URL to the Laravel service name.
+    ecommerce_auth_url: str = ""
+    ecommerce_api_key: str = ""
+    auth_cache_ttl_seconds: int = 300
+
+    # Server bind (used when running `python -m app.main` directly)
+    server_host: str = "0.0.0.0"
+    server_port: int = 8000
 
 
 # Create global settings instance

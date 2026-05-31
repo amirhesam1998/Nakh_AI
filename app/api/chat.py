@@ -234,6 +234,11 @@ def _get_user_measurements(user_id: str) -> Optional[dict]:
 
     for upload in candidates:
         results = upload.get("processing_results") or {}
+        if isinstance(results, str):
+            try:
+                results = json.loads(results)
+            except (json.JSONDecodeError, TypeError):
+                continue
         measurements_list = results.get("measurements", [])
         if not measurements_list:
             continue

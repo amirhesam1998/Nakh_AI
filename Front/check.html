@@ -31,13 +31,16 @@
         <!--  images grid section -->
         <div class="check-images-grid">
           <div class="check-image-item">
-            <img id="checkImage1" src="./image/image.jpg" alt="عکس جلو" />
+            <img id="checkImage1" src="./image/image.jpg" alt="جلو A-Pose" />
           </div>
           <div class="check-image-item">
-            <img id="checkImage2" src="./image/image.jpg" alt="عکس پشت" />
+            <img id="checkImage2" src="./image/image.jpg" alt="نیم‌رخ" />
           </div>
           <div class="check-image-item">
-            <img id="checkImage3" src="./image/image.jpg" alt="عکس کناری" />
+            <img id="checkImage3" src="./image/image.jpg" alt="پشت A-Pose" />
+          </div>
+          <div class="check-image-item">
+            <img id="checkImage4" src="./image/image.jpg" alt="جلو T-Pose" />
           </div>
         </div>
 
@@ -50,6 +53,10 @@
           <div class="parameter-item">
             <span class="parameter-label">وزن (kg):</span>
             <span class="parameter-value" id="param-weight">0</span>
+          </div>
+          <div class="parameter-item">
+            <span class="parameter-label">سن:</span>
+            <span class="parameter-value" id="param-age">0</span>
           </div>
           <div class="parameter-item">
             <span class="parameter-label">دور سینه (cm):</span>
@@ -115,6 +122,10 @@
           <div class="modal-input-group">
             <label for="edit-weight">وزن (kg)</label>
             <input type="number" id="edit-weight" name="weight" required />
+          </div>
+          <div class="modal-input-group">
+            <label for="edit-age">سن</label>
+            <input type="number" id="edit-age" name="age" min="3" max="120" required />
           </div>
           <div class="modal-input-group">
             <label for="edit-chest">دور سینه (cm)</label>

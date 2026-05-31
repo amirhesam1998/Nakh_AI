@@ -1,0 +1,11 @@
+Nakh_CMS/
+Front/
+.git/
+.idea/
+__pycache__/
+*.pyc
+.env.example
+media/
+logs/
+*.md
+.claude/

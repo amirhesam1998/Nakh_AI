@@ -39,8 +39,15 @@ class ProcessingResponse(BaseModel):
     three_cfg: Optional[Dict[str, Any]] = None
     width_scale: Optional[float] = None
     bmi: Optional[float] = None
+    age: Optional[int] = None
+    body_model: Optional[str] = None
     errors: List[str] = []
     original_images: List[str] = []
+    quality_scores: Optional[Dict[str, float]] = None
+    confidences: Optional[Dict[str, float]] = None
+    global_warnings: List[str] = []
+    silhouette_scores: Optional[Dict[str, float]] = None
+    processing_device: Optional[str] = None
 
 
 class ProcessingTriggerResponse(BaseModel):
