@@ -2,20 +2,30 @@ const apiUrl = window.apiUrl || ((path) => path);
 
 class QuestionnaireSystem {
   constructor() {
-    this.initialQuestions = [];
-    this.questions = []; // سوال‌هایی که فعلاً نمایش داده می‌شوند
+    this.questions = [];
     this.currentStep = 0;
     this.answers = {};
 
-    // Flow map loaded from /fake.json
-    this.flowMap = {};
-
     // CMS category tree (loaded dynamically)
-    this.cmsCategories = [];
+    this.categoryTree = [];
+    // Fallback flows from fake.json (used only if CMS is unreachable)
+    this.fallbackInitial = [];
+    this.fallbackFlows = {};
+    this.useFallback = false;
 
-    // AI size recommendation cache
-    this._sizeRecommendation = null;
-    this._sizesLoaded = false;
+    // ── Multi-product mode state ──
+    this._multiMode = false;
+    this._selectedTypes = [];      // [{slug, label}, ...]
+    this._activeTypeIdx = 0;       // which product type is being configured
+    this._typeAttrStep = 0;        // current attribute step within active type
+    this._perTypeFacets = {};      // slug → {size:[…], style:[…], …}
+    this._perTypeQuestions = {};    // slug → [question, …]
+    this._perTypeAnswers = {};     // slug → {size:"M", style:[…], …}
+    this._perTypeSizeRec = {};     // slug → AI size rec object
+    this._facetsLoadingCount = 0;
+
+    // Loading state
+    this._isLoading = false;
 
     // DOM Elements - using jQuery
     this.$stepLabel = $("#stepLabel");
@@ -30,66 +40,18 @@ class QuestionnaireSystem {
     this.$submitBtn = $("#submitBtn");
 
     this.attachEventListeners();
-    this.renderCurrentStep();
 
-    // Load dynamic data from local fake.json using jQuery AJAX
-    this.loadFromAjax("/fake.json");
+    // Show loading while category tree loads
+    this._showLoading("در حال بارگذاری دسته‌بندی‌ها...");
+
+    // Load category tree from CMS, with fake.json as fallback
+    this._loadCategoryTree();
   }
 
-  // Load questions/flows from a local JSON file using jQuery AJAX
-  loadFromAjax(url) {
-    $.ajax({
-      url: url,
-      method: "GET",
-      dataType: "json",
-      cache: false,
-    })
-      .done((data) => {
-        try {
-          if (Array.isArray(data.initial)) {
-            // نگهداری نسخهٔ اولیه (clone)
-            this.initialQuestions = data.initial.map((q) => Object.assign({}, q));
-            // نمایش اولیه براساس initial
-            this.questions = this.initialQuestions.slice();
-          } else {
-            // در صورتی که سرور پاسخ ندهد، حداقل از initializeQuestions پیش‌فرض استفاده می‌کنیم
-            if (this.initialQuestions.length === 0) this.initializeQuestionsFallback();
-            this.questions = this.initialQuestions.slice();
-          }
+  // ══════════════ Data Loading ══════════════
 
-          if (data.flows && typeof data.flows === "object") {
-            this.flowMap = data.flows;
-          }
-
-          this.currentStep = 0;
-          this.answers = {};
-          this.renderCurrentStep();
-
-          // After loading static flows, fetch live data from CMS
-          this.loadCmsCategories();
-          this.loadFacets();
-        } catch (e) {
-          console.error("Parsing fake.json failed:", e);
-          this.showError("خطا در پردازش دادهٔ .");
-        }
-      })
-      .fail((xhr, status, err) => {
-        console.error("AJAX error:", status, err);
-        this.initializeQuestionsFallback();
-        this.questions = this.initialQuestions.slice();
-        this.currentStep = 0;
-        this.answers = {};
-        this.renderCurrentStep();
-        this.showError("عدم امکان بارگذاری داده ");
-      });
-  }
-
-  /**
-   * Fetch category tree from CMS and inject into questionnaire flows.
-   * Replaces the hardcoded garmentType/fabricType options with real
-   * sub-categories from the store database.
-   */
-  loadCmsCategories() {
+  _loadCategoryTree() {
+    var self = this;
     var headers = {};
     if (window.API_CONFIG && window.API_CONFIG.API_KEY) {
       headers["x-api-key"] = window.API_CONFIG.API_KEY;
@@ -101,391 +63,54 @@ class QuestionnaireSystem {
       dataType: "json",
       timeout: 10000,
     })
-      .done((resp) => {
+      .done(function (resp) {
         var cats = resp.data || resp || [];
-        if (!Array.isArray(cats) || cats.length === 0) return;
-        this.cmsCategories = cats;
-        this._injectCmsCategories();
-        // Re-render if user is still on step 0
-        if (this.currentStep <= 1) this.renderCurrentStep();
-      })
-      .fail((xhr, status, err) => {
-        console.warn("CMS categories unavailable, using static options:", status, err);
-      });
-  }
-
-  /**
-   * Walk the CMS category tree and replace garmentType / fabricType
-   * question options in each audience flow.
-   *
-   * Expected CMS tree example:
-   *   [ { slug: "poshak", title: "پوشاک", children: [
-   *       { slug: "men", title: "مردانه", children: [
-   *           { slug: "shirt", title: "پیراهن" }, ...
-   *       ]},
-   *       { slug: "women", title: "زنانه", children: [...] },
-   *     ]},
-   *     { slug: "parche", title: "پارچه", children: [...] },
-   *   ]
-   */
-  _injectCmsCategories() {
-    if (!this.cmsCategories.length) return;
-
-    // Keywords to match audience groups to CMS sub-categories
-    var audienceKeywords = {
-      male:   ["مردانه", "مرد", "men", "male"],
-      female: ["زنانه", "زن", "women", "female"],
-      kids:   ["بچگانه", "بچه", "کودک", "kids", "children"],
-      unisex: ["یونیسکس", "unisex"],
-    };
-
-    // Detect which top-level is garment vs fabric
-    var garmentCat = null, fabricCat = null;
-    for (var i = 0; i < this.cmsCategories.length; i++) {
-      var c = this.cmsCategories[i];
-      var sl = (c.slug || "").toLowerCase();
-      var tl = (c.title || "").toLowerCase();
-      if (sl.indexOf("garment") !== -1 || sl.indexOf("poshak") !== -1 ||
-          tl.indexOf("پوشاک") !== -1 || tl.indexOf("لباس") !== -1) {
-        garmentCat = c;
-      } else if (sl.indexOf("fabric") !== -1 || sl.indexOf("parche") !== -1 ||
-                 tl.indexOf("پارچه") !== -1) {
-        fabricCat = c;
-      }
-    }
-
-    // Inject garment categories
-    if (garmentCat && this.flowMap.garment) {
-      this._injectForCategory(garmentCat, "garment", "garmentType", audienceKeywords);
-    }
-
-    // Inject fabric categories
-    if (fabricCat && this.flowMap.fabric) {
-      this._injectForCategory(fabricCat, "fabric", "fabricType", audienceKeywords,
-        { male: "male1", female: "female1", kids: "kids1", unisex: "unisex1" });
-    }
-  }
-
-  /**
-   * For a given top-level CMS category, find audience sub-categories
-   * and replace the target question's options with real sub-category titles.
-   */
-  _injectForCategory(cmsCat, flowKey, questionId, audienceKeywords, audienceMap) {
-    audienceMap = audienceMap || { male: "male", female: "female", kids: "kids", unisex: "unisex" };
-    var children = cmsCat.children || [];
-
-    Object.keys(audienceKeywords).forEach((audience) => {
-      var flowAudienceKey = audienceMap[audience];
-      if (!this.flowMap[flowKey] || !this.flowMap[flowKey][flowAudienceKey]) return;
-
-      var keywords = audienceKeywords[audience];
-
-      // Find the matching CMS audience sub-category
-      var matchedGroup = null;
-      for (var i = 0; i < children.length; i++) {
-        var child = children[i];
-        var title = (child.title || "").toLowerCase();
-        var slug  = (child.slug || "").toLowerCase();
-        for (var k = 0; k < keywords.length; k++) {
-          if (title.indexOf(keywords[k].toLowerCase()) !== -1 ||
-              slug.indexOf(keywords[k].toLowerCase()) !== -1) {
-            matchedGroup = child;
-            break;
-          }
-        }
-        if (matchedGroup) break;
-      }
-
-      if (!matchedGroup || !matchedGroup.children || matchedGroup.children.length === 0) return;
-
-      // Build options from the CMS children (these are the actual product types)
-      var options = matchedGroup.children.map(function (sub) {
-        return { value: sub.slug, label: sub.title };
-      });
-
-      // Find the target question in the flow and replace its options
-      var flowQuestions = this.flowMap[flowKey][flowAudienceKey];
-      for (var q = 0; q < flowQuestions.length; q++) {
-        if (flowQuestions[q].id === questionId) {
-          flowQuestions[q].options = options;
-          // Switch to radio for better UX if there are many options
-          if (options.length > 0 && options.length <= 12) {
-            flowQuestions[q].type = "radio";
-          } else if (options.length > 12) {
-            // Too many options — use select dropdown
-            flowQuestions[q].type = "select";
-            options.unshift({ value: "", label: "انتخاب کنید…" });
-          }
-          break;
-        }
-      }
-    });
-
-    // Also inject as top-level options if no audience grouping in CMS
-    // (e.g. the top-level category directly contains product types without gender split)
-    if (children.length > 0) {
-      var hasAudienceGroups = false;
-      Object.keys(audienceKeywords).forEach(function (aud) {
-        var kws = audienceKeywords[aud];
-        children.forEach(function (ch) {
-          var t = (ch.title || "").toLowerCase();
-          var s = (ch.slug || "").toLowerCase();
-          kws.forEach(function (kw) {
-            if (t.indexOf(kw.toLowerCase()) !== -1 || s.indexOf(kw.toLowerCase()) !== -1) {
-              hasAudienceGroups = true;
-            }
-          });
-        });
-      });
-
-      // If CMS has no audience grouping, inject all children into all audience flows
-      if (!hasAudienceGroups) {
-        var opts = children.map(function (sub) {
-          return { value: sub.slug, label: sub.title };
-        });
-        Object.keys(audienceMap).forEach((aud) => {
-          var fk = audienceMap[aud];
-          if (!this.flowMap[flowKey] || !this.flowMap[flowKey][fk]) return;
-          var fqs = this.flowMap[flowKey][fk];
-          for (var q = 0; q < fqs.length; q++) {
-            if (fqs[q].id === questionId) {
-              fqs[q].options = opts.slice();
-              break;
-            }
-          }
-        });
-      }
-    }
-  }
-
-  /**
-   * Load available sizes from CMS for a given category slug,
-   * then fetch AI size recommendation from the Python backend.
-   */
-  loadDynamicSizes(categorySlug) {
-    if (!categorySlug) return;
-
-    this._sizesLoaded = false;
-    this._sizeRecommendation = null;
-
-    var headers = {};
-    if (window.API_CONFIG && window.API_CONFIG.API_KEY) {
-      headers["x-api-key"] = window.API_CONFIG.API_KEY;
-    }
-
-    $.ajax({
-      url: apiUrl("/categories/" + encodeURIComponent(categorySlug) + "/sizes", "primary"),
-      method: "GET",
-      headers: headers,
-      dataType: "json",
-      timeout: 10000,
-    })
-      .done((resp) => {
-        var sizes = (resp && resp.data) || [];
-        if (!Array.isArray(sizes) || sizes.length === 0) {
-          console.warn("No sizes found for category:", categorySlug);
-          return;
-        }
-
-        // Update the size question options in all relevant flows
-        this._updateSizeOptions(sizes);
-        this._sizesLoaded = true;
-
-        // Re-render if user is currently on the size question
-        var currentQ = this.questions[this.currentStep];
-        if (currentQ && currentQ.id === "size") {
-          this.renderCurrentStep();
-        }
-
-        // Now fetch AI recommendation
-        this._fetchSizeRecommendation(sizes.map(function (s) { return s.value; }));
-      })
-      .fail(function (xhr, status, err) {
-        console.warn("Failed to load sizes from CMS:", status, err);
-      });
-  }
-
-  /**
-   * Replace size question options in the current question flow.
-   */
-  _updateSizeOptions(sizeOptions) {
-    // Update in the active questions array
-    for (var i = 0; i < this.questions.length; i++) {
-      if (this.questions[i].id === "size") {
-        var opts = [{ value: "", label: "انتخاب کنید…" }].concat(sizeOptions);
-        this.questions[i].options = opts;
-        this.questions[i].type = sizeOptions.length <= 10 ? "radio" : "select";
-        break;
-      }
-    }
-
-    // Also update in flowMap so rebuilds preserve the dynamic sizes
-    if (this.flowMap) {
-      var self = this;
-      Object.keys(this.flowMap).forEach(function (flowKey) {
-        var flow = self.flowMap[flowKey];
-        if (Array.isArray(flow)) {
-          self._updateSizeInArray(flow, sizeOptions);
-        } else if (typeof flow === "object") {
-          Object.keys(flow).forEach(function (subKey) {
-            if (Array.isArray(flow[subKey])) {
-              self._updateSizeInArray(flow[subKey], sizeOptions);
-            }
-          });
-        }
-      });
-    }
-  }
-
-  _updateSizeInArray(questionsArray, sizeOptions) {
-    for (var i = 0; i < questionsArray.length; i++) {
-      if (questionsArray[i].id === "size") {
-        var opts = [{ value: "", label: "انتخاب کنید…" }].concat(sizeOptions);
-        questionsArray[i].options = opts;
-        questionsArray[i].type = sizeOptions.length <= 10 ? "radio" : "select";
-        break;
-      }
-    }
-  }
-
-  /**
-   * Load dynamic facet values (style, occasion, season) from the CMS.
-   * Replaces static options in all flows with real database values.
-   */
-  loadFacets() {
-    var headers = {};
-    if (window.API_CONFIG && window.API_CONFIG.API_KEY) {
-      headers["x-api-key"] = window.API_CONFIG.API_KEY;
-    }
-
-    var self = this;
-    $.ajax({
-      url: apiUrl("/products/facets?fields=style,occasion,season", "primary"),
-      method: "GET",
-      headers: headers,
-      dataType: "json",
-      timeout: 10000,
-    })
-      .done(function (resp) {
-        var data = resp && resp.data ? resp.data : {};
-        if (data.style && data.style.length > 0) {
-          self._injectFacetOptions("style", data.style);
-        }
-        if (data.occasion && data.occasion.length > 0) {
-          self._injectFacetOptions("occasion", data.occasion);
-        }
-        if (data.season && data.season.length > 0) {
-          self._injectFacetOptions("season", data.season);
-        }
-        // Re-render if user is still on an early step
-        if (self.currentStep <= 2) self.renderCurrentStep();
-      })
-      .fail(function (xhr, status, err) {
-        console.warn("CMS facets unavailable, using static options:", status, err);
-      });
-  }
-
-  /**
-   * Replace options for a given question ID across all flows.
-   */
-  _injectFacetOptions(questionId, options) {
-    var self = this;
-
-    // Update active questions
-    for (var i = 0; i < this.questions.length; i++) {
-      if (this.questions[i].id === questionId) {
-        this.questions[i].options = options;
-        if (options.length <= 8) {
-          // Use checkbox for style (multi-select), radio for others
-          this.questions[i].type = (questionId === "style") ? "checkbox" : "radio";
-        } else {
-          this.questions[i].type = "select";
-          if (options[0] && options[0].value !== "") {
-            options.unshift({ value: "", label: "انتخاب کنید…" });
-          }
-        }
-        break;
-      }
-    }
-
-    // Update in flowMap so rebuilds also get dynamic values
-    if (!this.flowMap) return;
-    Object.keys(this.flowMap).forEach(function (flowKey) {
-      var flow = self.flowMap[flowKey];
-      if (Array.isArray(flow)) {
-        self._injectFacetInArray(flow, questionId, options);
-      } else if (typeof flow === "object") {
-        Object.keys(flow).forEach(function (subKey) {
-          if (Array.isArray(flow[subKey])) {
-            self._injectFacetInArray(flow[subKey], questionId, options);
-          }
-        });
-      }
-    });
-  }
-
-  _injectFacetInArray(questionsArray, questionId, options) {
-    for (var i = 0; i < questionsArray.length; i++) {
-      if (questionsArray[i].id === questionId) {
-        questionsArray[i].options = options.slice();
-        if (options.length <= 8) {
-          questionsArray[i].type = (questionId === "style") ? "checkbox" : "radio";
-        } else {
-          questionsArray[i].type = "select";
-        }
-        break;
-      }
-    }
-  }
-
-  /**
-   * Fetch AI size recommendation from the Python backend.
-   */
-  _fetchSizeRecommendation(availableSizes) {
-    var urlParams = new URLSearchParams(window.location.search);
-    var uploadId = urlParams.get("upload_id");
-    if (!uploadId || !availableSizes || availableSizes.length === 0) return;
-
-    var authHeaders = { "Content-Type": "application/json" };
-    var savedToken = localStorage.getItem("auth_token");
-    if (savedToken) {
-      authHeaders["Authorization"] = "Bearer " + savedToken;
-    }
-
-    var self = this;
-    $.ajax({
-      url: apiUrl("/recommendations/size-recommendation", "secondary"),
-      method: "POST",
-      headers: authHeaders,
-      contentType: "application/json",
-      data: JSON.stringify({
-        upload_id: uploadId,
-        available_sizes: availableSizes,
-      }),
-      dataType: "json",
-      timeout: 15000,
-    })
-      .done(function (resp) {
-        self._sizeRecommendation = resp;
-        // Re-render if user is on the size question
-        var currentQ = self.questions[self.currentStep];
-        if (currentQ && currentQ.id === "size") {
+        if (Array.isArray(cats) && cats.length > 0) {
+          self.categoryTree = cats;
+          self.useFallback = false;
+          self._hideLoading();
+          self._buildDynamicQuestions();
           self.renderCurrentStep();
+        } else {
+          self._loadFallback();
         }
       })
-      .fail(function (xhr, status, err) {
-        console.warn("Failed to get size recommendation:", status, err);
+      .fail(function () {
+        self._loadFallback();
       });
   }
 
-  // Fallback در صورتی که فایل JSON در دسترس نباشد
-  initializeQuestionsFallback() {
-    this.initialQuestions = [
+  _loadFallback() {
+    var self = this;
+    $.ajax({ url: "/fake.json", method: "GET", dataType: "json", cache: false })
+      .done(function (data) {
+        self.useFallback = true;
+        if (Array.isArray(data.initial)) {
+          self.fallbackInitial = data.initial.map(function (q) { return Object.assign({}, q); });
+        } else {
+          self._initFallbackDefaults();
+        }
+        if (data.flows && typeof data.flows === "object") {
+          self.fallbackFlows = data.flows;
+        }
+        self._hideLoading();
+        self._buildDynamicQuestions();
+        self.renderCurrentStep();
+      })
+      .fail(function () {
+        self._initFallbackDefaults();
+        self.useFallback = true;
+        self._hideLoading();
+        self._buildDynamicQuestions();
+        self.renderCurrentStep();
+        self.showError("عدم امکان بارگذاری داده");
+      });
+  }
+
+  _initFallbackDefaults() {
+    this.fallbackInitial = [
       {
-        id: "category",
-        label: "چه چیزی می‌خواهید؟",
-        type: "radio",
-        required: true,
+        id: "category", label: "چه چیزی می‌خواهید؟", type: "radio", required: true,
         options: [
           { value: "garment", label: "پوشاک" },
           { value: "fabric", label: "پارچه" },
@@ -494,217 +119,683 @@ class QuestionnaireSystem {
     ];
   }
 
-  // بازسازی سوال‌ها براساس initial + جریان انتخاب‌شده (flowMap)
-  rebuildQuestionsForCategory(categoryValue) {
-    // همیشه از initialQuestions شروع کن (clone)
-    const base = this.initialQuestions.map((q) => Object.assign({}, q));
+  // ══════════════ Question Building ══════════════
 
-    if (!categoryValue || !this.flowMap || !this.flowMap[categoryValue]) {
-      return base;
+  _buildDynamicQuestions() {
+    if (this.useFallback) {
+      this._buildFromFallback();
+      return;
     }
+    this._buildFromCategoryTree();
+  }
 
-    const flowEntry = this.flowMap[categoryValue];
+  /**
+   * Build base questions from the CMS category tree.
+   *
+   * Step 1: Top-level categories (Clothing / Fabric)
+   * Step 2: Children of selected (Men / Women / Kids / Unisex)
+   * Step 3: Grandchildren (Pants / Shirt / Coat / ...) — MULTI-SELECT
+   *
+   * Attribute questions (Step 4+) are NOT added here.
+   * They are built per-product-type in multi-product mode.
+   */
+  _buildFromCategoryTree() {
+    var questions = [];
 
-    // If flowEntry is an array, use it directly
-    if (Array.isArray(flowEntry)) {
-      return base.concat(flowEntry.map((q) => Object.assign({}, q)));
-    }
+    // ── Step 1: Main category ──
+    var serviceKeywords = ["خدمات", "service", "خدمت"];
+    var topCats = this.categoryTree.filter(function (c) {
+      var t = (c.title || "").toLowerCase();
+      var s = (c.slug || "").toLowerCase();
+      for (var i = 0; i < serviceKeywords.length; i++) {
+        if (t.indexOf(serviceKeywords[i]) !== -1 || s.indexOf(serviceKeywords[i]) !== -1) return false;
+      }
+      return true;
+    });
 
-    // If flowEntry is an object with gender sub-keys, add a gender question
-    if (typeof flowEntry === "object") {
-      const genderKeys = Object.keys(flowEntry);
-      const genderQuestion = {
+    questions.push({
+      id: "category",
+      label: "چه چیزی می‌خواهید؟",
+      type: "radio",
+      required: true,
+      options: topCats.map(function (c) {
+        return { value: c.slug, label: c.title };
+      }),
+    });
+
+    // ── Step 2: Audience / gender ──
+    var selectedCatSlug = this.answers["category"];
+    var selectedCat = selectedCatSlug ? this._findInTree(this.categoryTree, selectedCatSlug) : null;
+
+    if (selectedCat && selectedCat.children && selectedCat.children.length > 0) {
+      questions.push({
         id: "_audience",
         label: "برای چه کسی می‌خواهید؟",
         type: "radio",
         required: true,
-        options: genderKeys.map((k) => {
-          const labels = {
-            male: "مردانه", female: "زنانه", kids: "بچه‌گانه", unisex: "یونیسکس",
-            male1: "مردانه", female1: "زنانه", kids1: "بچه‌گانه", unisex1: "یونیسکس",
-          };
-          return { value: k, label: labels[k] || k };
+        options: selectedCat.children.map(function (c) {
+          return { value: c.slug, label: c.title };
         }),
-      };
-      const withGender = base.concat([genderQuestion]);
-
-      // If audience already answered, append the sub-flow questions
-      const audience = this.answers["_audience"];
-      if (audience && Array.isArray(flowEntry[audience])) {
-        return withGender.concat(flowEntry[audience].map((q) => Object.assign({}, q)));
-      }
-      return withGender;
+      });
     }
 
-    return base;
+    // ── Step 3: Product types — MULTI-SELECT ──
+    var selectedAudience = this._getSelectedAudience();
+
+    if (selectedAudience && selectedAudience.children && selectedAudience.children.length > 0) {
+      var isFabric = this._isFabricCategory(selectedCat);
+      var typeQuestionId = isFabric ? "fabricTypes" : "garmentTypes";
+      questions.push({
+        id: typeQuestionId,
+        label: "نوع محصولات مورد نظر خود را انتخاب کنید (می‌توانید چند مورد انتخاب کنید)",
+        type: "checkbox",
+        required: true,
+        options: selectedAudience.children.map(function (c) {
+          return { value: c.slug, label: c.title };
+        }),
+      });
+    }
+
+    this.questions = questions;
   }
 
-  // حذف پاسخ‌هایی که دیگر مرتبط نیستند
-  pruneAnswers(allowedQuestionIds) {
-    Object.keys(this.answers).forEach((qid) => {
-      if (!allowedQuestionIds.includes(qid)) {
-        delete this.answers[qid];
+  /**
+   * Build attribute questions for a specific product type using its facets data.
+   */
+  _buildAttributeQuestionsForType(typeSlug, facetsData) {
+    var questions = [];
+    var isFabric = this._isFabricCategory(
+      this._findInTree(this.categoryTree, this.answers["category"])
+    );
+    var data = facetsData || {};
+
+    // Size (always first if available)
+    if (data.size && data.size.length > 0) {
+      var sizeOpts = data.size.slice();
+      questions.push({
+        id: "size",
+        label: "سایز خود را انتخاب کنید",
+        type: sizeOpts.length <= 10 ? "radio" : "select",
+        required: true,
+        options: sizeOpts.length > 10
+          ? [{ value: "", label: "انتخاب کنید…" }].concat(sizeOpts)
+          : sizeOpts,
+      });
+    }
+
+    // Garment attributes
+    if (!isFabric) {
+      if (data.style && data.style.length > 0) {
+        questions.push({
+          id: "style", label: "استایل ترجیحی شما چیست؟",
+          type: "checkbox", required: false,
+          options: data.style,
+        });
       }
+      if (data.occasion && data.occasion.length > 0) {
+        questions.push({
+          id: "occasion", label: "برای چه مناسبتی می‌خواهید؟",
+          type: "checkbox", required: false,
+          options: data.occasion,
+        });
+      }
+      if (data.season && data.season.length > 0) {
+        questions.push({
+          id: "season", label: "برای چه فصلی می‌خواهید؟",
+          type: data.season.length <= 6 ? "radio" : "checkbox", required: false,
+          options: data.season,
+        });
+      }
+    }
+
+    // Colors (both garment and fabric)
+    if (data.color && data.color.length > 0) {
+      questions.push({
+        id: "colors", label: "رنگ‌های مورد علاقه خود را انتخاب کنید",
+        type: "checkbox", required: false,
+        options: data.color,
+      });
+    }
+
+    // Fabric-specific attributes
+    if (isFabric) {
+      if (data.pattern && data.pattern.length > 0) {
+        questions.push({
+          id: "pattern", label: "طرح پارچه مورد نظر را انتخاب کنید",
+          type: "radio", required: false,
+          options: data.pattern,
+        });
+      }
+      if (data.usage && data.usage.length > 0) {
+        questions.push({
+          id: "usage", label: "کاربرد پارچه را انتخاب کنید",
+          type: "checkbox", required: false,
+          options: data.usage,
+        });
+      }
+      if (data.occasion && data.occasion.length > 0) {
+        questions.push({
+          id: "occasion", label: "برای چه مناسبتی پارچه را می‌خواهید؟",
+          type: "checkbox", required: false,
+          options: data.occasion,
+        });
+      }
+      if (data.season && data.season.length > 0) {
+        questions.push({
+          id: "season", label: "فصل مورد نظر برای استفاده از پارچه",
+          type: data.season.length <= 6 ? "radio" : "checkbox", required: false,
+          options: data.season,
+        });
+      }
+      if (data.weave && data.weave.length > 0) {
+        questions.push({
+          id: "weave", label: "ویژگی‌های بافت پارچه",
+          type: "checkbox", required: false,
+          options: data.weave,
+        });
+      }
+      if (data.material && data.material.length > 0) {
+        questions.push({
+          id: "material", label: "جنس پارچه",
+          type: "radio", required: false,
+          options: data.material,
+        });
+      }
+    }
+
+    return questions;
+  }
+
+  /**
+   * Build questions from fallback fake.json (old flow system).
+   */
+  _buildFromFallback() {
+    var base = this.fallbackInitial.map(function (q) { return Object.assign({}, q); });
+    var categoryVal = this.answers["category"];
+
+    if (!categoryVal || !this.fallbackFlows[categoryVal]) {
+      this.questions = base;
+      return;
+    }
+
+    var flowEntry = this.fallbackFlows[categoryVal];
+
+    if (Array.isArray(flowEntry)) {
+      this.questions = base.concat(flowEntry.map(function (q) { return Object.assign({}, q); }));
+      return;
+    }
+
+    if (typeof flowEntry === "object") {
+      var genderKeys = Object.keys(flowEntry);
+      var labels = {
+        male: "مردانه", female: "زنانه", kids: "بچه‌گانه", unisex: "یونیسکس",
+        male1: "مردانه", female1: "زنانه", kids1: "بچه‌گانه", unisex1: "یونیسکس",
+      };
+      var genderQuestion = {
+        id: "_audience", label: "برای چه کسی می‌خواهید؟",
+        type: "radio", required: true,
+        options: genderKeys.map(function (k) { return { value: k, label: labels[k] || k }; }),
+      };
+      var withGender = base.concat([genderQuestion]);
+
+      var audience = this.answers["_audience"];
+      if (audience && Array.isArray(flowEntry[audience])) {
+        this.questions = withGender.concat(flowEntry[audience].map(function (q) { return Object.assign({}, q); }));
+      } else {
+        this.questions = withGender;
+      }
+    }
+  }
+
+  // ══════════════ Category Tree Helpers ══════════════
+
+  _findInTree(tree, slug) {
+    if (!tree || !slug) return null;
+    for (var i = 0; i < tree.length; i++) {
+      if (tree[i].slug === slug) return tree[i];
+      var found = this._findInTree(tree[i].children || [], slug);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  _findInChildren(children, slug) {
+    if (!children) return null;
+    for (var i = 0; i < children.length; i++) {
+      if (children[i].slug === slug) return children[i];
+    }
+    return null;
+  }
+
+  _isFabricCategory(cat) {
+    if (!cat) return false;
+    var s = (cat.slug || "").toLowerCase();
+    var t = (cat.title || "").toLowerCase();
+    return s.indexOf("fabric") !== -1 || s.indexOf("parche") !== -1 ||
+           t.indexOf("پارچه") !== -1;
+  }
+
+  _getSelectedAudience() {
+    var selectedCatSlug = this.answers["category"];
+    var selectedCat = selectedCatSlug ? this._findInTree(this.categoryTree, selectedCatSlug) : null;
+    var selectedAudienceSlug = this.answers["_audience"];
+    return selectedAudienceSlug && selectedCat
+      ? this._findInChildren(selectedCat.children, selectedAudienceSlug)
+      : null;
+  }
+
+  _mapCategoryForBackend(slug) {
+    var cat = this._findInTree(this.categoryTree, slug);
+    if (!cat) return slug;
+    if (this._isFabricCategory(cat)) return "fabric";
+    return "garment";
+  }
+
+  // ══════════════ Loading State ══════════════
+
+  _showLoading(message) {
+    this._isLoading = true;
+    this.$questionContainer.addClass("is-loading");
+    this.$backBtn.prop("disabled", true);
+    this.$nextBtn.prop("disabled", true);
+
+    this.$questionContainer.find(".q-loading-overlay").remove();
+
+    var overlay = $('<div class="q-loading-overlay">' +
+      '<div class="q-spinner"></div>' +
+      '<div class="q-loading-text">' + (message || "در حال بارگذاری...") + '</div>' +
+      '</div>');
+    this.$questionContainer.append(overlay);
+  }
+
+  _hideLoading() {
+    this._isLoading = false;
+    this.$questionContainer.removeClass("is-loading");
+    this.$questionContainer.find(".q-loading-overlay").remove();
+  }
+
+  // ══════════════ Multi-Product Mode ══════════════
+
+  _enterMultiProductMode(selectedSlugs) {
+    var self = this;
+    var selectedAudience = this._getSelectedAudience();
+
+    // Build selected types list with labels
+    this._selectedTypes = selectedSlugs.map(function (slug) {
+      var child = selectedAudience ? self._findInChildren(selectedAudience.children, slug) : null;
+      return { slug: slug, label: child ? child.title : slug };
+    });
+
+    this._multiMode = true;
+    this._activeTypeIdx = 0;
+    this._typeAttrStep = 0;
+    this._perTypeFacets = {};
+    this._perTypeQuestions = {};
+    // Preserve any previously entered per-type answers (in case user went back)
+    var oldAnswers = this._perTypeAnswers || {};
+    this._perTypeAnswers = {};
+    for (var i = 0; i < this._selectedTypes.length; i++) {
+      var slug = this._selectedTypes[i].slug;
+      this._perTypeAnswers[slug] = oldAnswers[slug] || {};
+    }
+    this._perTypeSizeRec = {};
+
+    this._loadAllTypeFacets();
+  }
+
+  _loadAllTypeFacets() {
+    var self = this;
+    this._facetsLoadingCount = this._selectedTypes.length;
+    this._showLoading("در حال بارگذاری ویژگی‌های محصولات...");
+
+    var headers = {};
+    if (window.API_CONFIG && window.API_CONFIG.API_KEY) {
+      headers["x-api-key"] = window.API_CONFIG.API_KEY;
+    }
+
+    var allFields = "size,style,occasion,season,color,pattern,usage,weave,material";
+
+    this._selectedTypes.forEach(function (typeInfo) {
+      var slug = typeInfo.slug;
+      var url = apiUrl("/products/facets?fields=" + allFields + "&category=" + encodeURIComponent(slug), "primary");
+
+      $.ajax({
+        url: url,
+        method: "GET",
+        headers: headers,
+        dataType: "json",
+        timeout: 10000,
+      })
+        .done(function (resp) {
+          var data = (resp && resp.data) ? resp.data : {};
+          self._perTypeFacets[slug] = data;
+          self._perTypeQuestions[slug] = self._buildAttributeQuestionsForType(slug, data);
+        })
+        .fail(function () {
+          console.warn("Failed to load facets for:", slug);
+          self._perTypeFacets[slug] = {};
+          self._perTypeQuestions[slug] = [];
+        })
+        .always(function () {
+          self._facetsLoadingCount--;
+          if (self._facetsLoadingCount <= 0) {
+            self._hideLoading();
+            self._onAllFacetsLoaded();
+          }
+        });
     });
   }
 
-  // Render current step
+  _onAllFacetsLoaded() {
+    this._activeTypeIdx = 0;
+    this._typeAttrStep = 0;
+
+    // Find first type that actually has questions
+    for (var i = 0; i < this._selectedTypes.length; i++) {
+      var slug = this._selectedTypes[i].slug;
+      var qs = this._perTypeQuestions[slug] || [];
+      if (qs.length > 0) {
+        this._activeTypeIdx = i;
+        break;
+      }
+    }
+
+    // Check if all types have zero questions → go straight to summary
+    var allEmpty = this._selectedTypes.every(function (t) {
+      return (this._perTypeQuestions[t.slug] || []).length === 0;
+    }.bind(this));
+
+    if (allEmpty) {
+      this.showSummary();
+      return;
+    }
+
+    // Fetch AI size recommendations for all types that have sizes
+    this._fetchAllSizeRecommendations();
+
+    this._renderMultiProductStep();
+  }
+
+  _fetchAllSizeRecommendations() {
+    var self = this;
+    var urlParams = new URLSearchParams(window.location.search);
+    var uploadId = urlParams.get("upload_id");
+    if (!uploadId) return;
+
+    var authHeaders = { "Content-Type": "application/json" };
+    var savedToken = localStorage.getItem("auth_token");
+    if (savedToken) {
+      authHeaders["Authorization"] = "Bearer " + savedToken;
+    }
+
+    this._selectedTypes.forEach(function (typeInfo) {
+      var slug = typeInfo.slug;
+      var facets = self._perTypeFacets[slug] || {};
+      var sizes = (facets.size || []).map(function (s) { return s.value; });
+      if (sizes.length === 0) return;
+
+      $.ajax({
+        url: apiUrl("/recommendations/size-recommendation", "secondary"),
+        method: "POST",
+        headers: authHeaders,
+        contentType: "application/json",
+        data: JSON.stringify({ upload_id: uploadId, available_sizes: sizes }),
+        dataType: "json",
+        timeout: 15000,
+      })
+        .done(function (resp) {
+          self._perTypeSizeRec[slug] = resp;
+          // Re-render if currently showing this type's size question
+          var activeType = self._selectedTypes[self._activeTypeIdx];
+          if (activeType && activeType.slug === slug) {
+            var questions = self._perTypeQuestions[slug] || [];
+            var currentQ = questions[self._typeAttrStep];
+            if (currentQ && currentQ.id === "size") {
+              self._renderMultiProductStep();
+            }
+          }
+        })
+        .fail(function () { /* ignore */ });
+    });
+  }
+
+  _resetMultiProductState() {
+    this._multiMode = false;
+    this._selectedTypes = [];
+    this._activeTypeIdx = 0;
+    this._typeAttrStep = 0;
+    this._perTypeFacets = {};
+    this._perTypeQuestions = {};
+    this._perTypeAnswers = {};
+    this._perTypeSizeRec = {};
+    this._facetsLoadingCount = 0;
+  }
+
+  // ══════════════ Rendering ══════════════
+
   renderCurrentStep() {
+    if (this._multiMode) {
+      this._renderMultiProductStep();
+      return;
+    }
+
     this.hideError();
     this.$summarySection.hide();
+    this.$questionContainer.show();
+    this.$backBtn.show();
+    this.$nextBtn.show();
 
-    // اگر سوالی وجود نداشته باشد، پیام مناسب نشان بده
     if (!this.questions || this.questions.length === 0) {
-      this.$stepLabel.text("بدون سوال");
+      this.$stepLabel.text("در حال بارگذاری...");
       this.$progressBar.css("width", "0%");
       this.$questionContainer.html(
-        '<div class="question-wrapper">سوالی برای نمایش وجود ندارد.</div>'
+        '<div class="question-wrapper"><div class="ai-rec-loading"><span class="spinner"></span><p>در حال دریافت اطلاعات...</p></div></div>'
       );
       this.$backBtn.prop("disabled", true);
       this.$nextBtn.prop("disabled", true);
       return;
     }
-    console.log(this.questions);
-    
-    // اطمینان از اینکه currentStep در محدوده است
+
     if (this.currentStep < 0) this.currentStep = 0;
     if (this.currentStep > this.questions.length - 1)
       this.currentStep = this.questions.length - 1;
 
-    const question = this.questions[this.currentStep];
-    const totalSteps = this.questions.length;
+    var question = this.questions[this.currentStep];
+    var totalSteps = this.questions.length;
 
-    // Update progress
-    this.$stepLabel.text(`مرحله ${this.currentStep + 1} از ${totalSteps}`);
-    this.$progressBar.css(
-      "width",
-      `${((this.currentStep + 1) / totalSteps) * 100}%`
-    );
+    this.$stepLabel.text("مرحله " + (this.currentStep + 1) + " از " + totalSteps);
+    this.$progressBar.css("width", ((this.currentStep + 1) / totalSteps) * 100 + "%");
 
-    // Render question
     this.$questionContainer.html(this.buildQuestionHTML(question));
 
-    // Update buttons
     this.$backBtn.prop("disabled", this.currentStep === 0);
     this.$nextBtn.prop("disabled", false);
-    this.$nextBtn.text(
-      this.currentStep === totalSteps - 1 && totalSteps > 1
-        ? "اتمام و مشاهده خلاصه"
-        : "بعدی"
-    );
 
-    // Restore saved answer if exists
+    // Last base step button text
+    var isProductTypeStep = question.id === "garmentTypes" || question.id === "fabricTypes";
+    if (isProductTypeStep) {
+      this.$nextBtn.text("ادامه تنظیمات محصولات");
+    } else if (this.currentStep === totalSteps - 1 && totalSteps > 1) {
+      this.$nextBtn.text("اتمام و مشاهده خلاصه");
+    } else {
+      this.$nextBtn.text("بعدی");
+    }
+
     this.restoreSavedAnswer(question);
   }
 
-  // Build HTML for different question types
-  buildQuestionHTML(question) {
-    let html = `<div class="question-wrapper">`;
-    html += `<label class="question-label">${question.label}${
-      question.required ? ' <span class="required">*</span>' : ""
-    }</label>`;
+  _renderMultiProductStep() {
+    this.hideError();
+    this.$summarySection.hide();
+    this.$questionContainer.show();
+    this.$backBtn.show();
+    this.$nextBtn.show();
 
-    // Show AI size recommendation banner for the size question
-    if (question.id === "size" && this._sizeRecommendation && this._sizeRecommendation.recommended_size) {
-      var rec = this._sizeRecommendation;
-      var confLabel = rec.confidence === "high" ? "اطمینان بالا" : (rec.confidence === "medium" ? "اطمینان متوسط" : "تقریبی");
-      var confClass = rec.confidence === "high" ? "high" : (rec.confidence === "medium" ? "medium" : "low");
-      html += `<div class="ai-size-recommendation ${confClass}">`;
-      html += `<div class="ai-rec-icon">&#x1F4D0;</div>`;
-      html += `<div class="ai-rec-content">`;
-      html += `<strong>پیشنهاد هوش مصنوعی: سایز ${rec.recommended_size}</strong>`;
-      html += `<span class="ai-rec-confidence">(${confLabel})</span>`;
-      if (rec.details) {
-        var parts = [];
-        if (rec.details.chest) parts.push("سینه: " + rec.details.chest);
-        if (rec.details.waist) parts.push("کمر: " + rec.details.waist);
-        if (rec.details.hip) parts.push("باسن: " + rec.details.hip);
-        if (parts.length > 0) {
-          html += `<div class="ai-rec-details">${parts.join(" | ")}</div>`;
-        }
+    var activeType = this._selectedTypes[this._activeTypeIdx];
+    if (!activeType) return;
+
+    var questions = this._perTypeQuestions[activeType.slug] || [];
+
+    // ── Progress calculation ──
+    var totalAttrSteps = 0;
+    var completedAttrSteps = 0;
+    var self = this;
+    this._selectedTypes.forEach(function (t, idx) {
+      var tq = self._perTypeQuestions[t.slug] || [];
+      totalAttrSteps += Math.max(tq.length, 1);
+      if (idx < self._activeTypeIdx) {
+        completedAttrSteps += Math.max(tq.length, 1);
+      } else if (idx === self._activeTypeIdx) {
+        completedAttrSteps += self._typeAttrStep;
       }
-      html += `<div class="ai-rec-note">شما می‌توانید سایز دیگری انتخاب کنید</div>`;
-      html += `</div></div>`;
+    });
+    var baseSteps = this.questions.length;
+    var totalProgress = baseSteps + totalAttrSteps;
+    var currentProgress = baseSteps + completedAttrSteps;
+
+    var attrLabel = questions.length > 0
+      ? " — ویژگی " + (this._typeAttrStep + 1) + " از " + questions.length
+      : "";
+    this.$stepLabel.text(activeType.label + attrLabel);
+    this.$progressBar.css("width", ((currentProgress + 1) / totalProgress) * 100 + "%");
+
+    // ── Build pills + question HTML ──
+    var html = this._buildProductTypePillsHTML();
+
+    if (questions.length === 0) {
+      html += '<div class="question-wrapper">' +
+        '<div class="empty-state">ویژگی خاصی برای «' + activeType.label + '» یافت نشد. ادامه دهید.</div>' +
+        '</div>';
+    } else if (this._typeAttrStep < questions.length) {
+      var question = questions[this._typeAttrStep];
+      // Temporarily set size recommendation for this type
+      var currentSizeRec = this._perTypeSizeRec[activeType.slug] || null;
+      html += this._buildQuestionHTMLWithSizeRec(question, currentSizeRec);
     }
 
-    switch (question.type) {
-      case "radio":
-        html += `<div class="options-container">`;
-        question.options.forEach((option) => {
-          var isRecommended = question.id === "size" &&
-            this._sizeRecommendation &&
-            this._sizeRecommendation.recommended_size &&
-            option.value &&
-            option.value.toUpperCase() === this._sizeRecommendation.recommended_size.toUpperCase();
-          var extraClass = isRecommended ? " ai-recommended" : "";
-          var badge = isRecommended ? '<span class="ai-badge">AI</span>' : "";
-          html += `
-            <label class="option-item${extraClass}">
-              <input type="radio" name="${question.id}" value="${option.value}" />
-              <span class="option-label">${option.label}${badge}</span>
-            </label>
-          `;
-        });
-        html += `</div>`;
-        break;
+    this.$questionContainer.html(html);
 
-      case "checkbox":
-        html += `<div class="options-container">`;
-        question.options.forEach((option) => {
-          html += `
-            <label class="option-item">
-              <input type="checkbox" name="${question.id}" value="${option.value}" />
-              <span class="option-label">${option.label}</span>
-            </label>
-          `;
-        });
-        html += `</div>`;
-        break;
+    // Attach pill click handlers
+    this._attachPillHandlers();
 
-      case "select":
-        html += `<select name="${question.id}" class="select-input">`;
-        // html += `<option value="">-- انتخاب کنید --</option>`;
-        question.options.forEach((option) => {
-          html += `<option value="${option.value}">${option.label}</option>`;
-        });
-        html += `</select>`;
-        break;
-
-      case "text":
-        html += `<input type="text" name="${question.id}" class="text-input" placeholder="${question.placeholder || ""}" />`;
-        break;
-
-      case "textarea":
-        html += `<textarea name="${question.id}" class="textarea-input" placeholder="${question.placeholder || ""}"></textarea>`;
-        break;
-
-      case "number":
-        html += `<input type="number" name="${question.id}" class="text-input" ${
-          question.min != null ? `min="${question.min}"` : ""
-        } ${question.max != null ? `max="${question.max}"` : ""} />`;
-        break;
-
-      default:
-        html += `<div>نوع سوال پشتیبانی نشده: ${question.type}</div>`;
+    // Restore saved answer for this type
+    if (questions.length > 0 && this._typeAttrStep < questions.length) {
+      this._restoreMultiAnswer(activeType.slug, questions[this._typeAttrStep]);
     }
 
-    html += `</div>`;
+    // ── Button states ──
+    this.$backBtn.prop("disabled", false);
+
+    // Show "finish" text only if this is the last attr of the last type
+    // AND all other types are already completed
+    var isLastStepHere = (questions.length === 0 || this._typeAttrStep >= questions.length - 1);
+    var allOthersComplete = true;
+    for (var oi = 0; oi < this._selectedTypes.length; oi++) {
+      if (oi === this._activeTypeIdx) continue;
+      if (!this._isTypeCompleted(oi)) { allOthersComplete = false; break; }
+    }
+    var showFinish = isLastStepHere && allOthersComplete;
+    this.$nextBtn.text(showFinish ? "اتمام و مشاهده خلاصه" : "بعدی");
+    this.$nextBtn.prop("disabled", false);
+  }
+
+  _buildProductTypePillsHTML() {
+    var html = '<div class="product-type-pills">';
+    var self = this;
+
+    this._selectedTypes.forEach(function (t, idx) {
+      var isActive = idx === self._activeTypeIdx;
+      var isCompleted = self._isTypeCompleted(idx);
+      var cls = "product-type-pill";
+      if (isActive) cls += " active";
+      else if (isCompleted) cls += " completed";
+
+      var icon = isCompleted && !isActive
+        ? '<span class="pill-check">&#10003;</span>'
+        : '<span class="pill-number">' + (idx + 1) + '</span>';
+
+      html += '<div class="' + cls + '" data-type-idx="' + idx + '">';
+      html += icon;
+      html += '<span class="pill-label">' + t.label + '</span>';
+      html += '</div>';
+    });
+
+    html += '</div>';
     return html;
   }
 
-  // Restore saved answer
-  restoreSavedAnswer(question) {
-    const savedAnswer = this.answers[question.id];
+  _isTypeCompleted(typeIdx) {
+    if (typeIdx >= this._selectedTypes.length) return false;
+    var slug = this._selectedTypes[typeIdx].slug;
+    var questions = this._perTypeQuestions[slug] || [];
+    // No questions → auto-completed
+    if (questions.length === 0) return true;
+    // Check that all required questions have answers
+    var typeAnswers = this._perTypeAnswers[slug] || {};
+    for (var i = 0; i < questions.length; i++) {
+      var q = questions[i];
+      if (q.required) {
+        var a = typeAnswers[q.id];
+        if (a == null || a === "" || (Array.isArray(a) && a.length === 0)) return false;
+      }
+    }
+    return true;
+  }
+
+  _attachPillHandlers() {
+    var self = this;
+    this.$questionContainer.find(".product-type-pill").on("click", function () {
+      var idx = parseInt($(this).data("type-idx"), 10);
+      if (isNaN(idx) || idx === self._activeTypeIdx) return;
+
+      // Only allow clicking completed types (to review) or the current one
+      // Don't allow jumping forward to unstarted types
+      if (!self._isTypeCompleted(idx) && idx > self._activeTypeIdx) return;
+
+      // Save current answer before switching
+      self._saveCurrentMultiAnswer();
+
+      self._activeTypeIdx = idx;
+      var slug = self._selectedTypes[idx].slug;
+      var questions = self._perTypeQuestions[slug] || [];
+      // If completed, show first question for review; else find first unanswered
+      if (self._isTypeCompleted(idx)) {
+        self._typeAttrStep = 0;
+      } else {
+        self._typeAttrStep = self._findFirstUnansweredStep(idx);
+      }
+      self._renderMultiProductStep();
+    });
+  }
+
+  _saveCurrentMultiAnswer() {
+    var activeType = this._selectedTypes[this._activeTypeIdx];
+    if (!activeType) return;
+    var questions = this._perTypeQuestions[activeType.slug] || [];
+    if (questions.length === 0 || this._typeAttrStep >= questions.length) return;
+
+    var question = questions[this._typeAttrStep];
+    var answer = this.getCurrentAnswer();
+    if (answer !== null && answer !== undefined) {
+      if (!this._perTypeAnswers[activeType.slug]) {
+        this._perTypeAnswers[activeType.slug] = {};
+      }
+      this._perTypeAnswers[activeType.slug][question.id] = answer;
+    }
+  }
+
+  _restoreMultiAnswer(typeSlug, question) {
+    var answers = this._perTypeAnswers[typeSlug] || {};
+    var savedAnswer = answers[question.id];
 
     // Auto-select AI recommended size if no saved answer yet
-    if (savedAnswer == null && question.id === "size" && this._sizeRecommendation && this._sizeRecommendation.recommended_size) {
-      var rec = this._sizeRecommendation.recommended_size;
+    var sizeRec = this._perTypeSizeRec[typeSlug];
+    if (savedAnswer == null && question.id === "size" && sizeRec && sizeRec.recommended_size) {
+      var rec = sizeRec.recommended_size;
       if (question.type === "radio") {
-        this.$questionContainer
-          .find(`input[type="radio"][name="size"][value="${rec}"]`)
-          .prop("checked", true);
+        this.$questionContainer.find('input[type="radio"][name="size"][value="' + rec + '"]').prop("checked", true);
       } else if (question.type === "select") {
-        this.$questionContainer.find(`select[name="size"]`).val(rec);
+        this.$questionContainer.find('select[name="size"]').val(rec);
       }
       return;
     }
@@ -712,148 +803,384 @@ class QuestionnaireSystem {
     if (savedAnswer == null) return;
 
     if (question.type === "radio") {
-      this.$questionContainer
-        .find(`input[type="radio"][name="${question.id}"][value="${savedAnswer}"]`)
-        .prop("checked", true);
+      this.$questionContainer.find('input[type="radio"][name="' + question.id + '"][value="' + savedAnswer + '"]').prop("checked", true);
     } else if (question.type === "checkbox") {
-      savedAnswer.forEach((value) => {
-        this.$questionContainer
-          .find(`input[type="checkbox"][name="${question.id}"][value="${value}"]`)
-          .prop("checked", true);
+      var $container = this.$questionContainer;
+      (Array.isArray(savedAnswer) ? savedAnswer : []).forEach(function (value) {
+        $container.find('input[type="checkbox"][name="' + question.id + '"][value="' + value + '"]').prop("checked", true);
       });
     } else if (question.type === "select") {
-      this.$questionContainer.find(`select[name="${question.id}"]`).val(savedAnswer);
+      this.$questionContainer.find('select[name="' + question.id + '"]').val(savedAnswer);
     } else {
-      this.$questionContainer.find(`input[name="${question.id}"], textarea[name="${question.id}"]`).val(savedAnswer);
+      this.$questionContainer.find('input[name="' + question.id + '"], textarea[name="' + question.id + '"]').val(savedAnswer);
     }
   }
 
-  // Get current answer
-  getCurrentAnswer() {
-    const question = this.questions[this.currentStep];
+  // ══════════════ HTML Building ══════════════
 
+  buildQuestionHTML(question) {
+    return this._buildQuestionHTMLWithSizeRec(question, null);
+  }
+
+  _buildQuestionHTMLWithSizeRec(question, sizeRec) {
+    var html = '<div class="question-wrapper">';
+    html += '<label class="question-label">' + question.label +
+      (question.required ? ' <span class="required">*</span>' : '') + '</label>';
+
+    // AI size recommendation banner
+    if (question.id === "size" && sizeRec && sizeRec.recommended_size) {
+      var rec = sizeRec;
+      var confLabel = rec.confidence === "high" ? "اطمینان بالا" : (rec.confidence === "medium" ? "اطمینان متوسط" : "تقریبی");
+      var confClass = rec.confidence === "high" ? "high" : (rec.confidence === "medium" ? "medium" : "low");
+      html += '<div class="ai-size-recommendation ' + confClass + '">';
+      html += '<div class="ai-rec-icon">&#x1F4D0;</div>';
+      html += '<div class="ai-rec-content">';
+      html += '<strong>پیشنهاد هوش مصنوعی: سایز ' + rec.recommended_size + '</strong>';
+      html += '<span class="ai-rec-confidence">(' + confLabel + ')</span>';
+      if (rec.details) {
+        var parts = [];
+        if (rec.details.chest) parts.push("سینه: " + rec.details.chest);
+        if (rec.details.waist) parts.push("کمر: " + rec.details.waist);
+        if (rec.details.hip) parts.push("باسن: " + rec.details.hip);
+        if (parts.length > 0) {
+          html += '<div class="ai-rec-details">' + parts.join(" | ") + '</div>';
+        }
+      }
+      html += '<div class="ai-rec-note">شما می‌توانید سایز دیگری انتخاب کنید</div>';
+      html += '</div></div>';
+    }
+
+    switch (question.type) {
+      case "radio":
+        html += '<div class="options-container">';
+        var self = this;
+        (question.options || []).forEach(function (option) {
+          var isRecommended = question.id === "size" && sizeRec && sizeRec.recommended_size &&
+            option.value && option.value.toUpperCase() === sizeRec.recommended_size.toUpperCase();
+          var extraClass = isRecommended ? " ai-recommended" : "";
+          var badge = isRecommended ? '<span class="ai-badge">AI</span>' : "";
+          html += '<label class="option-item' + extraClass + '">' +
+            '<input type="radio" name="' + question.id + '" value="' + option.value + '" />' +
+            '<span class="option-label">' + option.label + badge + '</span></label>';
+        });
+        html += '</div>';
+        break;
+
+      case "checkbox":
+        html += '<div class="options-container">';
+        (question.options || []).forEach(function (option) {
+          html += '<label class="option-item">' +
+            '<input type="checkbox" name="' + question.id + '" value="' + option.value + '" />' +
+            '<span class="option-label">' + option.label + '</span></label>';
+        });
+        html += '</div>';
+        break;
+
+      case "select":
+        html += '<select name="' + question.id + '" class="select-input">';
+        (question.options || []).forEach(function (option) {
+          html += '<option value="' + option.value + '">' + option.label + '</option>';
+        });
+        html += '</select>';
+        break;
+
+      case "text":
+        html += '<input type="text" name="' + question.id + '" class="text-input" placeholder="' + (question.placeholder || "") + '" />';
+        break;
+
+      case "number":
+        html += '<input type="number" name="' + question.id + '" class="text-input"' +
+          (question.min != null ? ' min="' + question.min + '"' : '') +
+          (question.max != null ? ' max="' + question.max + '"' : '') + ' />';
+        break;
+
+      default:
+        html += '<div>نوع سوال پشتیبانی نشده: ' + question.type + '</div>';
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  restoreSavedAnswer(question) {
+    var savedAnswer = this.answers[question.id];
+    if (savedAnswer == null) return;
+
+    if (question.type === "radio") {
+      this.$questionContainer.find('input[type="radio"][name="' + question.id + '"][value="' + savedAnswer + '"]').prop("checked", true);
+    } else if (question.type === "checkbox") {
+      var $container = this.$questionContainer;
+      (Array.isArray(savedAnswer) ? savedAnswer : []).forEach(function (value) {
+        $container.find('input[type="checkbox"][name="' + question.id + '"][value="' + value + '"]').prop("checked", true);
+      });
+    } else if (question.type === "select") {
+      this.$questionContainer.find('select[name="' + question.id + '"]').val(savedAnswer);
+    } else {
+      this.$questionContainer.find('input[name="' + question.id + '"], textarea[name="' + question.id + '"]').val(savedAnswer);
+    }
+  }
+
+  // ══════════════ Answer Handling ══════════════
+
+  getCurrentAnswer() {
+    var question;
+    if (this._multiMode) {
+      var activeType = this._selectedTypes[this._activeTypeIdx];
+      if (!activeType) return null;
+      var questions = this._perTypeQuestions[activeType.slug] || [];
+      question = questions[this._typeAttrStep];
+    } else {
+      question = this.questions[this.currentStep];
+    }
     if (!question) return null;
 
     if (question.type === "radio") {
-      const $checked = this.$questionContainer.find(
-        `input[type="radio"][name="${question.id}"]:checked`
-      );
+      var $checked = this.$questionContainer.find('input[type="radio"][name="' + question.id + '"]:checked');
       return $checked.length ? $checked.val() : null;
     } else if (question.type === "checkbox") {
-      const $checked = this.$questionContainer.find(
-        `input[type="checkbox"][name="${question.id}"]:checked`
-      );
-      return $checked
-        .map(function () {
-          return $(this).val();
-        })
-        .get();
+      return this.$questionContainer.find('input[type="checkbox"][name="' + question.id + '"]:checked')
+        .map(function () { return $(this).val(); }).get();
     } else if (question.type === "select") {
-      return this.$questionContainer.find(`select[name="${question.id}"]`).val();
+      return this.$questionContainer.find('select[name="' + question.id + '"]').val();
     } else {
-      const value = this.$questionContainer.find(`input[name="${question.id}"], textarea[name="${question.id}"]`).val();
+      var value = this.$questionContainer.find('input[name="' + question.id + '"], textarea[name="' + question.id + '"]').val();
       return value ? value.trim() : null;
     }
   }
 
-  // Validate current answer
   validateAnswer(answer) {
-    const question = this.questions[this.currentStep];
+    var question;
+    if (this._multiMode) {
+      var activeType = this._selectedTypes[this._activeTypeIdx];
+      if (!activeType) return null;
+      var questions = this._perTypeQuestions[activeType.slug] || [];
+      question = questions[this._typeAttrStep];
+    } else {
+      question = this.questions[this.currentStep];
+    }
+    if (!question) return null;
 
     if (question.required) {
       if (question.type === "checkbox") {
-        if (!answer || answer.length === 0) {
-          return "لطفاً حداقل یک مورد را انتخاب کنید.";
-        }
+        if (!answer || answer.length === 0) return "لطفاً حداقل یک مورد را انتخاب کنید.";
       } else if (!answer || answer === "") {
         return "این فیلد الزامی است.";
       }
     }
-
     if (question.type === "number" && answer) {
-      const num = Number(answer);
-      if (question.min != null && num < question.min) {
-        return `مقدار باید حداقل ${question.min} باشد.`;
-      }
-      if (question.max != null && num > question.max) {
-        return `مقدار باید حداکثر ${question.max} باشد.`;
-      }
+      var num = Number(answer);
+      if (question.min != null && num < question.min) return "مقدار باید حداقل " + question.min + " باشد.";
+      if (question.max != null && num > question.max) return "مقدار باید حداکثر " + question.max + " باشد.";
     }
-
     return null;
   }
 
-  // Show error message
-  showError(message) {
-    this.$errorMessage.text(message).show();
-  }
+  showError(message) { this.$errorMessage.text(message).show(); }
+  hideError() { this.$errorMessage.hide(); }
 
-  // Hide error message
-  hideError() {
-    this.$errorMessage.hide();
-  }
+  // ══════════════ Navigation ══════════════
 
-  // Handle next button
   handleNext() {
-    const answer = this.getCurrentAnswer();
-    const error = this.validateAnswer(answer);
+    if (this._isLoading) return;
 
-    if (error) {
-      this.showError(error);
+    // ── Multi-product mode navigation ──
+    if (this._multiMode) {
+      this._handleMultiNext();
       return;
     }
 
-    // Save answer
-    const question = this.questions[this.currentStep];
+    var answer = this.getCurrentAnswer();
+    var error = this.validateAnswer(answer);
+    if (error) { this.showError(error); return; }
+
+    var question = this.questions[this.currentStep];
     this.answers[question.id] = answer;
 
-    // When user selects garmentType or fabricType, load dynamic sizes
-    if (question.id === "garmentType" || question.id === "fabricType") {
-      this.loadDynamicSizes(answer);
+    // Category changed → clear downstream
+    if (question.id === "category") {
+      delete this.answers["_audience"];
+      delete this.answers["garmentTypes"];
+      delete this.answers["fabricTypes"];
+      this._resetMultiProductState();
+      this._buildDynamicQuestions();
+      this.currentStep++;
+      this.renderCurrentStep();
+      return;
     }
 
-    // Handle category or audience selection: rebuild the question flow
-    if (question.id === "category" || question.id === "_audience") {
-      const sel = this.answers["category"];
-      const newQuestions = this.rebuildQuestionsForCategory(sel);
+    // Audience changed → clear product types
+    if (question.id === "_audience") {
+      delete this.answers["garmentTypes"];
+      delete this.answers["fabricTypes"];
+      this._resetMultiProductState();
+      this._buildDynamicQuestions();
+      this.currentStep++;
+      this.renderCurrentStep();
+      return;
+    }
 
-      // پاکسازی پاسخ‌های نامرتبط
-      const allowedIds = newQuestions.map((q) => q.id);
-      this.pruneAnswers(allowedIds);
+    // Product type step (multi-select) → enter multi-product mode
+    if (question.id === "garmentTypes" || question.id === "fabricTypes") {
+      var selectedSlugs = Array.isArray(answer) ? answer : [answer];
+      if (selectedSlugs.length === 0) {
+        this.showError("لطفاً حداقل یک نوع محصول را انتخاب کنید.");
+        return;
+      }
+      this.answers[question.id] = selectedSlugs;
+      this._enterMultiProductMode(selectedSlugs);
+      return;
+    }
 
-      // جایگزین کن و به سوال بعدی بزن
-      this.questions = newQuestions;
-      // اگر سوال بعدی وجود نداشت => خلاصه
+    // Fallback mode flow rebuilds
+    if (this.useFallback && (question.id === "category" || question.id === "_audience")) {
+      this._buildDynamicQuestions();
       if (this.currentStep >= this.questions.length - 1) {
         this.showSummary();
-        return;
       } else {
         this.currentStep++;
         this.renderCurrentStep();
-        return;
       }
+      return;
     }
 
-    // Check if this is the last question
+    // Last question
     if (this.currentStep === this.questions.length - 1) {
       this.showSummary();
       return;
     }
 
-    // Move to next step
     this.currentStep++;
     this.renderCurrentStep();
   }
 
-  // Handle back button
+  _handleMultiNext() {
+    var activeType = this._selectedTypes[this._activeTypeIdx];
+    if (!activeType) return;
+
+    var questions = this._perTypeQuestions[activeType.slug] || [];
+
+    // Validate and save current answer if there are questions
+    if (questions.length > 0 && this._typeAttrStep < questions.length) {
+      var answer = this.getCurrentAnswer();
+      var error = this.validateAnswer(answer);
+      if (error) { this.showError(error); return; }
+
+      if (!this._perTypeAnswers[activeType.slug]) {
+        this._perTypeAnswers[activeType.slug] = {};
+      }
+      this._perTypeAnswers[activeType.slug][questions[this._typeAttrStep].id] = answer;
+
+      // Advance within this type
+      if (this._typeAttrStep < questions.length - 1) {
+        this._typeAttrStep++;
+        this._renderMultiProductStep();
+        return;
+      }
+    }
+
+    // Current type done → find next incomplete type
+    var nextIdx = this._findNextIncompleteType(this._activeTypeIdx + 1);
+    if (nextIdx !== -1) {
+      this._activeTypeIdx = nextIdx;
+      this._typeAttrStep = 0;
+      // Skip types with no questions automatically
+      var nextQuestions = this._perTypeQuestions[this._selectedTypes[nextIdx].slug] || [];
+      if (nextQuestions.length === 0) {
+        // This type auto-completes, try next again
+        this._handleMultiNext();
+        return;
+      }
+      this._renderMultiProductStep();
+      return;
+    }
+
+    // All types complete — verify before showing summary
+    if (this._allTypesCompleted()) {
+      this.showSummary();
+    } else {
+      // Jump to first incomplete type
+      var firstIncomplete = this._findNextIncompleteType(0);
+      if (firstIncomplete !== -1) {
+        this._activeTypeIdx = firstIncomplete;
+        this._typeAttrStep = this._findFirstUnansweredStep(firstIncomplete);
+        this._renderMultiProductStep();
+        this.showError("لطفاً ابتدا تمام بخش‌ها را تکمیل کنید.");
+      } else {
+        this.showSummary();
+      }
+    }
+  }
+
+  _findNextIncompleteType(startIdx) {
+    for (var i = startIdx; i < this._selectedTypes.length; i++) {
+      if (!this._isTypeCompleted(i)) return i;
+    }
+    return -1;
+  }
+
+  _findFirstUnansweredStep(typeIdx) {
+    var slug = this._selectedTypes[typeIdx].slug;
+    var questions = this._perTypeQuestions[slug] || [];
+    var typeAnswers = this._perTypeAnswers[slug] || {};
+    for (var i = 0; i < questions.length; i++) {
+      var q = questions[i];
+      if (q.required) {
+        var a = typeAnswers[q.id];
+        if (a == null || a === "" || (Array.isArray(a) && a.length === 0)) return i;
+      }
+    }
+    return 0;
+  }
+
+  _allTypesCompleted() {
+    for (var i = 0; i < this._selectedTypes.length; i++) {
+      if (!this._isTypeCompleted(i)) return false;
+    }
+    return true;
+  }
+
   handleBack() {
+    if (this._isLoading) return;
+
+    if (this._multiMode) {
+      this._handleMultiBack();
+      return;
+    }
+
     if (this.currentStep > 0) {
       this.currentStep--;
       this.renderCurrentStep();
     }
   }
 
-  // Show summary
+  _handleMultiBack() {
+    // Save current answer before going back
+    this._saveCurrentMultiAnswer();
+
+    // Go back within current type
+    if (this._typeAttrStep > 0) {
+      this._typeAttrStep--;
+      this._renderMultiProductStep();
+      return;
+    }
+
+    // Go to previous type's last attribute
+    if (this._activeTypeIdx > 0) {
+      this._activeTypeIdx--;
+      var prevType = this._selectedTypes[this._activeTypeIdx];
+      var prevQuestions = this._perTypeQuestions[prevType.slug] || [];
+      this._typeAttrStep = Math.max(0, prevQuestions.length - 1);
+      this._renderMultiProductStep();
+      return;
+    }
+
+    // Exit multi-product mode, go back to product type selection step
+    this._multiMode = false;
+    this.renderCurrentStep();
+  }
+
+  // ══════════════ Summary & Submit ══════════════
+
   showSummary() {
     this.$questionContainer.hide();
     this.$backBtn.hide();
@@ -862,72 +1189,117 @@ class QuestionnaireSystem {
     this.$stepLabel.text("خلاصه پاسخ‌ها");
     this.$progressBar.css("width", "100%");
 
-    // Build answers list
-    let html = "";
-    this.questions.forEach((question) => {
-      const answer = this.answers[question.id];
-      let displayAnswer = "";
+    var html = "";
+    var self = this;
 
-      if (Array.isArray(answer)) {
-        // Find labels for checkbox answers
-        const labels = answer.map((val) => {
-          const option = question.options ? question.options.find((opt) => opt.value === val) : null;
-          return option ? option.label : val;
-        });
-        displayAnswer = labels.join("، ");
-      } else {
-        // Find label for single answer
-        if (question.options) {
-          const option = question.options.find((opt) => opt.value === answer);
-          displayAnswer = option ? option.label : answer;
-        } else {
-          displayAnswer = answer;
-        }
-      }
+    // Base questions (category, audience, product types)
+    this.questions.forEach(function (question) {
+      var answer = self.answers[question.id];
+      var displayAnswer = self._formatAnswerForDisplay(question, answer);
 
-      html += `
-        <div class="answer-item">
-          <div class="answer-question">${question.label}</div>
-          <div class="answer-value">${displayAnswer || "-"}</div>
-        </div>
-      `;
+      html += '<div class="answer-item">' +
+        '<div class="answer-question">' + question.label + '</div>' +
+        '<div class="answer-value">' + (displayAnswer || "-") + '</div></div>';
     });
+
+    // Per-product-type answers
+    if (this._multiMode && this._selectedTypes.length > 0) {
+      this._selectedTypes.forEach(function (typeInfo) {
+        html += '<div class="answer-group-header">' +
+          '<span class="answer-group-icon">&#9654;</span> ' +
+          typeInfo.label + '</div>';
+
+        var typeQuestions = self._perTypeQuestions[typeInfo.slug] || [];
+        var typeAnswers = self._perTypeAnswers[typeInfo.slug] || {};
+
+        if (typeQuestions.length === 0) {
+          html += '<div class="answer-item"><div class="answer-value" style="color:#999;">ویژگی خاصی تعریف نشده</div></div>';
+        } else {
+          typeQuestions.forEach(function (q) {
+            var answer = typeAnswers[q.id];
+            var displayAnswer = self._formatAnswerForDisplay(q, answer);
+            html += '<div class="answer-item answer-item-indented">' +
+              '<div class="answer-question">' + q.label + '</div>' +
+              '<div class="answer-value">' + (displayAnswer || "-") + '</div></div>';
+          });
+        }
+      });
+    }
 
     this.$answersList.html(html);
   }
 
-  // Handle edit button
+  _formatAnswerForDisplay(question, answer) {
+    if (answer == null) return "-";
+    if (Array.isArray(answer)) {
+      var labels = answer.map(function (val) {
+        var option = question.options ? question.options.find(function (opt) { return opt.value === val; }) : null;
+        return option ? option.label : val;
+      });
+      return labels.join("، ");
+    } else {
+      if (question.options) {
+        var option = question.options.find(function (opt) { return opt.value === answer; });
+        return option ? option.label : answer;
+      }
+      return answer;
+    }
+  }
+
   handleEdit() {
     this.$questionContainer.show();
     this.$backBtn.show();
     this.$nextBtn.show();
     this.$summarySection.hide();
-    this.currentStep = 0;
-    this.renderCurrentStep();
+
+    if (this._multiMode) {
+      // Go back to the last type's last attribute for review
+      this._activeTypeIdx = this._selectedTypes.length - 1;
+      var lastQuestions = this._perTypeQuestions[this._selectedTypes[this._activeTypeIdx].slug] || [];
+      this._typeAttrStep = Math.max(0, lastQuestions.length - 1);
+      this._renderMultiProductStep();
+    } else {
+      this.currentStep = 0;
+      this.renderCurrentStep();
+    }
   }
 
-  // Handle submit button - using jQuery AJAX POST
   handleSubmit() {
-    // Read upload_id from URL query params
     var urlParams = new URLSearchParams(window.location.search);
     var uploadId = urlParams.get("upload_id");
 
-    const jsonData = {
+    // Prepare answers for the backend
+    var submittedAnswers = Object.assign({}, this.answers);
+    if (!this.useFallback && submittedAnswers.category) {
+      submittedAnswers.category = this._mapCategoryForBackend(submittedAnswers.category);
+    }
+
+    // Add per-product answers in multi-product mode
+    if (this._multiMode && this._selectedTypes.length > 0) {
+      submittedAnswers.productAnswers = {};
+      for (var i = 0; i < this._selectedTypes.length; i++) {
+        var slug = this._selectedTypes[i].slug;
+        submittedAnswers.productAnswers[slug] = Object.assign({}, this._perTypeAnswers[slug] || {});
+      }
+    }
+
+    var jsonData = {
       completedAt: new Date().toISOString(),
-      answers: this.answers,
+      answers: submittedAnswers,
     };
     if (uploadId) {
       jsonData.upload_id = uploadId;
     }
 
-    // Auth header
     var authHeaders = {};
     var savedToken = localStorage.getItem("auth_token");
     if (savedToken) {
       authHeaders["Authorization"] = "Bearer " + savedToken;
     }
 
-    // Using jQuery AJAX for POST request
+    var self = this;
+    var backendCategory = submittedAnswers.category || "";
+
     $.ajax({
       url: apiUrl("/uploads/questionnaire", "secondary"),
       method: "POST",
@@ -936,80 +1308,194 @@ class QuestionnaireSystem {
       data: JSON.stringify(jsonData),
       dataType: "json",
     })
-      .done((response) => {
-        console.log("Submitted data:", jsonData);
-        console.log("Server response:", response);
-        // Redirect to recommendations page
+      .done(function (response) {
         var recUploadId = (response && response.upload_id) || uploadId || "";
-        window.location.href = "recommendations.html?upload_id=" + encodeURIComponent(recUploadId);
+        if (backendCategory === "fabric") {
+          // Show processing screen and wait for AI to finish
+          self._showProcessingScreen(recUploadId, authHeaders);
+        } else {
+          window.location.href = "recommendations.html?upload_id=" + encodeURIComponent(recUploadId);
+        }
       })
-      .fail((xhr, status, error) => {
+      .fail(function (xhr, status, error) {
         console.error("Submit error:", status, error);
         alert("خطا در ارسال اطلاعات. لطفاً دوباره تلاش کنید.");
-        console.log("Data that would be sent:", jsonData);
       });
   }
 
-  // Attach event listeners using jQuery
+  _showProcessingScreen(uploadId, authHeaders) {
+    this.$summarySection.hide();
+    this.$questionContainer.hide();
+    this.$backBtn.hide();
+    this.$nextBtn.hide();
+
+    var $overlay = $('<div id="processingOverlay" class="processing-overlay">' +
+      '<div class="processing-content">' +
+        '<div class="processing-spinner"></div>' +
+        '<h3 class="processing-title">در حال پردازش هوش مصنوعی</h3>' +
+        '<p class="processing-message">لطفاً صبر کنید، سیستم در حال تحلیل اطلاعات شما و آماده‌سازی پیشنهادات است...</p>' +
+        '<div class="processing-progress">' +
+          '<div class="processing-progress-bar"></div>' +
+        '</div>' +
+        '<p class="processing-status" id="processingStatus">در حال شروع پردازش...</p>' +
+      '</div>' +
+    '</div>');
+
+    $("body").append($overlay);
+    this._pollProcessingStatus(uploadId, authHeaders);
+  }
+
+  _pollProcessingStatus(uploadId, authHeaders) {
+    var self = this;
+    var attempts = 0;
+    var maxAttempts = 120;
+    var $status = $("#processingStatus");
+    var $bar = $(".processing-progress-bar");
+
+    var statusMessages = [
+      "در حال شروع پردازش...",
+      "در حال تحلیل اندازه‌های بدن...",
+      "در حال بررسی ترجیحات شما...",
+      "در حال جستجوی محصولات مناسب...",
+      "در حال تولید پیشنهادات هوشمند...",
+      "تقریباً آماده است..."
+    ];
+
+    function updateProgress() {
+      var pct = Math.min(90, (attempts / maxAttempts) * 100);
+      $bar.css("width", pct + "%");
+      var msgIdx = Math.min(Math.floor(attempts / 5), statusMessages.length - 1);
+      $status.text(statusMessages[msgIdx]);
+    }
+
+    function poll() {
+      attempts++;
+      updateProgress();
+
+      if (attempts > maxAttempts) {
+        self._showProcessingError("زمان پردازش بیش از حد طول کشید. لطفاً دوباره تلاش کنید.", uploadId, authHeaders);
+        return;
+      }
+
+      $.ajax({
+        url: apiUrl("/recommendations", "secondary"),
+        method: "POST",
+        headers: authHeaders,
+        contentType: "application/json",
+        data: JSON.stringify({ upload_id: uploadId }),
+        dataType: "json",
+        timeout: 60000,
+      })
+        .done(function (data) {
+          if (data && data.products && data.products.length > 0) {
+            $bar.css("width", "100%");
+            $status.text("پردازش تکمیل شد! در حال انتقال...");
+            try {
+              sessionStorage.setItem("fabric_recommendations", JSON.stringify(data));
+            } catch (e) { /* ignore */ }
+            setTimeout(function () {
+              window.location.href = "ShowFabrics.html?upload_id=" + encodeURIComponent(uploadId);
+            }, 800);
+          } else {
+            setTimeout(poll, 2000);
+          }
+        })
+        .fail(function (xhr) {
+          if (xhr.status === 404 || xhr.status === 401) {
+            self._showProcessingError("خطا در احراز هویت یا یافتن اطلاعات آپلود.", uploadId, authHeaders);
+            return;
+          }
+          setTimeout(poll, 2000);
+        });
+    }
+
+    setTimeout(poll, 1500);
+  }
+
+  _showProcessingError(message, uploadId, authHeaders) {
+    var self = this;
+    var $overlay = $("#processingOverlay");
+    $overlay.find(".processing-content").html(
+      '<div class="processing-error-icon">&#10007;</div>' +
+      '<h3 class="processing-title" style="color:#e74c3c;">' + message + '</h3>' +
+      '<button class="btn-primary processing-retry-btn" id="retryProcessing">' +
+        '<i class="ri-refresh-line"></i> تلاش مجدد' +
+      '</button>' +
+      '<button class="btn-outline processing-back-btn" id="backToQuestions">' +
+        'بازگشت به پرسشنامه' +
+      '</button>'
+    );
+
+    $overlay.on("click", "#retryProcessing", function () {
+      $overlay.remove();
+      self._showProcessingScreen(uploadId, authHeaders);
+    });
+
+    $overlay.on("click", "#backToQuestions", function () {
+      $overlay.remove();
+      self.$summarySection.show();
+    });
+  }
+
+  // ══════════════ Event Listeners ══════════════
+
   attachEventListeners() {
-    this.$nextBtn.on("click", () => this.handleNext());
-    this.$backBtn.on("click", () => this.handleBack());
-    this.$editBtn.on("click", () => this.handleEdit());
-    this.$submitBtn.on("click", () => this.handleSubmit());
+    var self = this;
 
-    // اگر کاربر مستقیماً گزینه category را تغییر داد (بدون زدن Next)، فوراً جریان را بازسازی کن
-    $(document).on("change", "input[name='category']", (e) => {
-      const val = $(e.currentTarget).val();
-      // ذخیرهٔ موقت انتخاب category
-      this.answers["category"] = val;
-      const newQuestions = this.rebuildQuestionsForCategory(val);
-      const allowedIds = newQuestions.map((q) => q.id);
-      this.pruneAnswers(allowedIds);
-      this.questions = newQuestions;
-      // اینجا تصمیم گرفتم کاربر را بعد از انتخاب به سوال بعدی ببرم تا تجربهٔ خطی حفظ شود:
-      if (this.currentStep === 0 && this.questions.length > 1) {
-        this.currentStep = 1;
-      } else {
-        // اگر کاربر در مرحله‌ای دیگر است، مطمئن شیم currentStep معتبر است
-        if (this.currentStep > this.questions.length - 1) {
-          this.currentStep = this.questions.length - 1;
-        }
+    this.$nextBtn.on("click", function () { self.handleNext(); });
+    this.$backBtn.on("click", function () { self.handleBack(); });
+    this.$editBtn.on("click", function () { self.handleEdit(); });
+    this.$submitBtn.on("click", function () { self.handleSubmit(); });
+
+    // Auto-advance on category selection
+    $(document).on("change", "input[name='category']", function (e) {
+      if (self._isLoading) return;
+      var val = $(e.currentTarget).val();
+      self.answers["category"] = val;
+      delete self.answers["_audience"];
+      delete self.answers["garmentTypes"];
+      delete self.answers["fabricTypes"];
+      self._resetMultiProductState();
+      self._buildDynamicQuestions();
+
+      if (self.currentStep === 0 && self.questions.length > 1) {
+        self.currentStep = 1;
       }
-      this.renderCurrentStep();
+      self.renderCurrentStep();
     });
 
-    // When the user selects an audience (gender), rebuild flow to include sub-flow questions
-    $(document).on("change", "input[name='_audience']", (e) => {
-      const val = $(e.currentTarget).val();
-      this.answers["_audience"] = val;
-      const newQuestions = this.rebuildQuestionsForCategory(this.answers["category"]);
-      const allowedIds = newQuestions.map((q) => q.id);
-      this.pruneAnswers(allowedIds);
-      this.questions = newQuestions;
-      // Move to next question after audience selection
-      const audienceIdx = this.questions.findIndex((q) => q.id === "_audience");
-      if (audienceIdx >= 0 && audienceIdx < this.questions.length - 1) {
-        this.currentStep = audienceIdx + 1;
+    // Auto-advance on audience selection
+    $(document).on("change", "input[name='_audience']", function (e) {
+      if (self._isLoading) return;
+      var val = $(e.currentTarget).val();
+      self.answers["_audience"] = val;
+      delete self.answers["garmentTypes"];
+      delete self.answers["fabricTypes"];
+      self._resetMultiProductState();
+      self._buildDynamicQuestions();
+
+      var audienceIdx = self.questions.findIndex(function (q) { return q.id === "_audience"; });
+      if (audienceIdx >= 0 && audienceIdx < self.questions.length - 1) {
+        self.currentStep = audienceIdx + 1;
       }
-      this.renderCurrentStep();
+      self.renderCurrentStep();
     });
 
-    // Keyboard navigation using jQuery
-    $(document).on("keydown", (e) => {
+    // Keyboard navigation
+    $(document).on("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
-        const isTextarea = $(document.activeElement).is("textarea");
-        if (!isTextarea && this.$summarySection.is(":hidden")) {
+        if (!$(document.activeElement).is("textarea") && self.$summarySection.is(":hidden")) {
           e.preventDefault();
-          this.handleNext();
+          self.handleNext();
         }
       } else if (e.key === "Enter" && e.shiftKey) {
         e.preventDefault();
-        this.handleBack();
+        self.handleBack();
       }
     });
   }
 }
 
-$(() => {
+$(function () {
   new QuestionnaireSystem();
 });

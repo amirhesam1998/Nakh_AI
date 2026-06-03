@@ -29,6 +29,29 @@ class ProductService:
         self.api_key = getattr(settings, "shop_api_key", "") or getattr(settings, "SHOP_API_KEY", "")
         self._client: Optional[httpx.AsyncClient] = None
 
+    @staticmethod
+    def _extract_products(data) -> list[dict]:
+        """Extract the product list from the CMS API response.
+
+        The CMS wraps responses as: {"success": true, "result": {"data": [...]}}
+        This method handles that structure and common variations.
+        """
+        if isinstance(data, list):
+            return data
+        if not isinstance(data, dict):
+            return []
+        # CMS standard: {"success": ..., "result": {"data": [...]}}
+        result = data.get("result")
+        if isinstance(result, dict):
+            inner = result.get("data")
+            if isinstance(inner, list):
+                return inner
+        # Flat: {"data": [...]}
+        inner = data.get("data")
+        if isinstance(inner, list):
+            return inner
+        return []
+
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._client is None:
@@ -38,9 +61,32 @@ class ProductService:
             self._client = httpx.AsyncClient(
                 base_url=self.api_base_url or "",
                 headers=headers,
-                timeout=30.0
+                timeout=httpx.Timeout(
+                    connect=5.0,   # fail fast if CMS is unreachable
+                    read=30.0,
+                    write=10.0,
+                    pool=10.0,
+                ),
             )
         return self._client
+
+    async def check_cms_reachable(self) -> bool:
+        """Quick connectivity check — returns False if CMS is down."""
+        if not self.api_base_url:
+            return False
+        try:
+            client = await self._get_client()
+            resp = await client.get("/api/v1/health", timeout=3.0)
+            return resp.status_code < 500
+        except Exception:
+            # Any endpoint returning anything means CMS is up
+            # Try the base URL as fallback
+            try:
+                client = await self._get_client()
+                resp = await client.get("/", timeout=3.0)
+                return True
+            except Exception:
+                return False
 
     async def close(self):
         """Close the HTTP client."""
@@ -95,7 +141,7 @@ class ProductService:
             response.raise_for_status()
 
             data = response.json()
-            return data.get("products", data) if isinstance(data, dict) else data
+            return self._extract_products(data) or (data if isinstance(data, list) else [])
 
         except httpx.HTTPError as e:
             logger.error(f"Error fetching products: {e}")
@@ -138,81 +184,101 @@ class ProductService:
             elif category in ("fabric", "پارچه"):
                 params["category"] = "fabric"
 
-            # Map type answer to search
-            search = (
+            # Subcategory filter — the garmentType/fabricType value is a
+            # category slug from the CMS (e.g. the slug for "شلوار").
+            # This tells the CMS to filter products to that specific category.
+            subcategory = (
                 answers.get("garmentType")
                 or answers.get("fabricType")
                 or answers.get("type")
                 or ""
             )
-            if search:
-                params["search"] = search
+            if subcategory:
+                params["subcategory"] = subcategory
 
             # Gender filter
             if gender:
                 params["gender"] = gender
 
-            # Garment type filter from questionnaire
-            garment_type = answers.get("garmentType") or ""
-            if garment_type:
-                params["garment_type"] = garment_type
+            # ── Only send lightweight filters to the CMS ──
+            # The CMS endpoint can hang/timeout with too many attribute filters.
+            # We send category + subcategory + gender (essential for the SQL query)
+            # and let the LLM do the attribute matching from the broader result set.
+            #
+            # Optionally include size if it's a simple value (not multi-value).
+            if calculated_size and "," not in calculated_size:
+                params["size"] = calculated_size.strip()
 
-            # Size filter — try with size first, fall back without if empty
-            if calculated_size:
-                params["size"] = calculated_size
-
-            # Style / Occasion / Season filters
-            for key in ("style", "occasion", "season"):
-                val = answers.get(key, "")
-                if val:
-                    # If it's a list (checkbox), send first value for filter
-                    if isinstance(val, list):
-                        params[key] = val[0] if val else ""
-                    else:
-                        params[key] = val
-
-            # Price filters
+            # Price filters are safe — they're simple numeric range queries
             if answers.get("minPrice"):
                 params["min_price"] = answers["minPrice"]
             if answers.get("maxPrice"):
                 params["max_price"] = answers["maxPrice"]
 
+            logger.warning(
+                "Recommendation request params: %s",
+                params
+            )
+
+            # Use a shorter per-request timeout so relaxation doesn't chain 30s waits
+            req_timeout = 15.0
+
             response = await client.get(
-                "/api/v1/products/for-recommendation", params=params
+                "/api/v1/products/for-recommendation", params=params,
+                timeout=req_timeout,
             )
             response.raise_for_status()
 
             data = response.json()
-            products = data.get("data", data) if isinstance(data, dict) else data
-            if isinstance(products, list) and products:
+            products = self._extract_products(data)
+            if products:
                 return products, "shop"
 
-            # Smart fallback: progressively relax filters until products are found
-            relaxable = ["size", "style", "occasion", "season"]
-            while not (isinstance(products, list) and products) and any(k in params for k in relaxable):
-                # Remove the most specific filter first
+            # Relaxation: if no products, try without size, then without subcategory
+            relaxable = ["size", "min_price", "max_price", "subcategory"]
+            while not products and any(k in params for k in relaxable):
                 for key in relaxable:
                     if key in params:
                         logger.info("No products found, retrying without %s=%s", key, params[key])
                         params.pop(key)
                         break
-                response = await client.get(
-                    "/api/v1/products/for-recommendation", params=params
-                )
-                response.raise_for_status()
-                data = response.json()
-                products = data.get("data", data) if isinstance(data, dict) else data
-                if isinstance(products, list) and products:
-                    return products, "shop"
+                try:
+                    response = await client.get(
+                        "/api/v1/products/for-recommendation", params=params,
+                        timeout=req_timeout,
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    products = self._extract_products(data)
+                    if products:
+                        return products, "shop"
+                except (httpx.TimeoutException, httpx.ConnectError):
+                    logger.warning("CMS timeout during filter relaxation, stopping retries")
+                    break
 
-            logger.warning("Laravel returned empty products, falling back to mocks")
+            if not products:
+                logger.warning("Laravel returned empty products after relaxation, falling back to mocks")
+                return self._get_mock_products(), "mock"
+            return products, "shop"
+
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            logger.error(
+                "CMS %s (%s) for %s/api/v1/products/for-recommendation — params=%s",
+                "TIMEOUT" if isinstance(e, httpx.TimeoutException) else "CONNECT ERROR",
+                type(e).__name__, self.api_base_url,
+                params if 'params' in locals() else '?',
+            )
+            if isinstance(e, httpx.ConnectError):
+                logger.error("Is the CMS running at %s?", self.api_base_url)
             return self._get_mock_products(), "mock"
-
         except httpx.HTTPError as e:
-            logger.error("Error fetching recommendation products: %s", e)
+            logger.error(
+                "CMS HTTP error [%s]: %s (url=%s)",
+                type(e).__name__, e, self.api_base_url,
+            )
             return self._get_mock_products(), "mock"
         except Exception as e:
-            logger.error("Unexpected error fetching recommendation products: %s", e)
+            logger.error("Unexpected error fetching recommendation products [%s]: %s", type(e).__name__, e)
             return self._get_mock_products(), "mock"
 
     async def get_product_by_id(self, product_id: str) -> Optional[dict]:

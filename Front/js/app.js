@@ -495,49 +495,44 @@ function updateClothTexture(imageUrl) {
 }
 
 /* ----------------------------- تنظیمات پایه ----------------------------- */
-const TAXONOMY_URL = "./taxonomy.fa.v2.json"; // get
 const API_SUBMIT_URL = apiUrl("/api/selection"); // post
 
-// عناصر DOM مطابق index.html و style.css
+// DOM elements
 const optionsBtnGroup = document.querySelector(".dynamic-menu-options-btn");
 const optionTabButtons =
   optionsBtnGroup?.querySelectorAll("button[data-option]") ?? [];
 
 const optionsListEl = document.getElementById("optionsList");
-const displayBtn = document.getElementById("displayBtn");
 const saveSubmitBtn = document.getElementById("saveSubmitBtn");
-const showAIsuggestionBtn = document.getElementById("showAIsuggestion");
+const fabricRecTextEl = document.getElementById("fabricRecText");
 
-// منو و کنترل‌های نمایش/مخفی
+// Menu controls
 const menuEl = document.getElementById("dynamicMenu");
 const menuCloseBtn = document.getElementById("menuCloseBtn");
 const menuToggleBtn = document.getElementById("menuToggleBtn");
 
-// مودال پیشنهادات هوش مصنوعی
+// AI Modal
 const aiModal = document.getElementById("aiModal");
 const aiModalBody = document.getElementById("aiModalBody");
 const aiModalClose = document.getElementById("aiModalClose");
 
-// اعلان هشدار بالای صفحه (اختیاری - اگر خواستید قابلیت بستن اضافه کنید)
-const warningNotice = document.getElementById("warningNotice");
-
-/* ------------------------------ وضعیت برنامه ------------------------------ */
+/* ------------------------------ State ------------------------------ */
 const state = {
-  // تب‌ها: category | material | color
-  activeTab: "category",
-
-  // داده‌ی جیسون بک‌اند
-  data: null, // { taxonomy: { categories: [...] }, ai_recommendations: {...} }
-
-  // انتخاب‌های کاربر (تک‌گزینه‌ای)
+  activeTab: "fabric",  // fabric | color
+  products: [],          // AI-recommended products
+  recommendationText: "",
   selection: {
-    category: null, // category.id
-    fabric: null, // fabric.id (زیرمجموعه‌ی category)
-    color: null, // color.id (زیرمجموعه‌ی fabric)
+    fabric: null,   // selected product index
+    color: null,    // selected variant index
   },
 };
 
-/* ------------------------------ یوتیلیتی‌ها ------------------------------ */
+/* ------------------------------ Utilities ------------------------------ */
+function getUploadId() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("upload_id") || "";
+}
+
 function setActiveTab(tab) {
   state.activeTab = tab;
   optionTabButtons.forEach((btn) => {
@@ -545,31 +540,44 @@ function setActiveTab(tab) {
   });
 }
 
-function getSelectedCategory() {
-  if (!state.selection.category) return null;
-  return state.data?.taxonomy?.categories?.find(
-    (c) => c.id === state.selection.category
-  );
-}
-
-function getSelectedFabric() {
-  const cat = getSelectedCategory();
-  if (!cat || !state.selection.fabric) return null;
-  return cat.fabrics?.find((f) => f.id === state.selection.fabric) ?? null;
+function getSelectedProduct() {
+  if (state.selection.fabric === null) return null;
+  return state.products[state.selection.fabric] || null;
 }
 
 function clearList() {
-  optionsListEl.innerHTML = "";
+  if (optionsListEl) optionsListEl.innerHTML = "";
 }
 
 function renderEmptyState(text = "یک گزینه را انتخاب کنید") {
   const div = document.createElement("div");
   div.className = "empty-state";
   div.textContent = text;
-  optionsListEl.appendChild(div);
+  if (optionsListEl) optionsListEl.appendChild(div);
 }
 
-function makeOptionCard({ id, fa, image, isSelected, onClick }) {
+function formatFabricPrice(val) {
+  if (!val) return "";
+  return Number(val).toLocaleString("fa-IR") + " تومان";
+}
+
+function getProductUrl(p) {
+  if (p.product_url && p.product_url !== "#") return p.product_url;
+  if (p.slug) {
+    const cfg = window.API_CONFIG || {};
+    const shopBase = (cfg.BASE_URL || "").replace(/\/api\/v1\/?$/, "");
+    return shopBase + "/products/" + p.slug;
+  }
+  return "";
+}
+
+function getDefaultImage() {
+  const cfg = window.API_CONFIG || {};
+  const shopBase = (cfg.BASE_URL || "").replace(/\/api\/v1\/?$/, "");
+  return shopBase ? shopBase + "/no-image-product.png" : "";
+}
+
+function makeOptionCard({ id, fa, image, isSelected, onClick, price }) {
   const card = document.createElement("div");
   card.className = "dynamic-menu-option-item";
   if (isSelected) card.classList.add("selected");
@@ -579,7 +587,7 @@ function makeOptionCard({ id, fa, image, isSelected, onClick }) {
   const thumb = document.createElement("img");
   thumb.className = "thumb";
   thumb.loading = "lazy";
-  thumb.src = image || "";
+  thumb.src = image || getDefaultImage();
   thumb.alt = fa || id || "";
 
   const label = document.createElement("div");
@@ -590,59 +598,67 @@ function makeOptionCard({ id, fa, image, isSelected, onClick }) {
   card.appendChild(thumbWrap);
   card.appendChild(label);
 
+  if (price) {
+    const priceEl = document.createElement("div");
+    priceEl.className = "option-price";
+    priceEl.textContent = price;
+    card.appendChild(priceEl);
+  }
+
   card.addEventListener("click", () => onClick?.({ id, fa, image, card }));
   return card;
 }
 
-/* ---------------------------- رندر هر تب ---------------------------- */
-function renderCategoryTab() {
-  clearList();
-  const cats = state.data?.taxonomy?.categories ?? [];
-  if (!cats.length) return renderEmptyState("دسته‌ای یافت نشد!");
+/* -------------- Extract color variants from a product -------------- */
+function getProductColors(product) {
+  const variants = product.variants || [];
+  const colors = [];
+  const seen = new Set();
 
-  cats.forEach((cat) => {
-    const isSelected = state.selection.category === cat.id;
-    const card = makeOptionCard({
-      id: cat.id,
-      fa: cat.fa,
-      image: cat.image,
-      isSelected,
-      onClick: ({ id }) => {
-        state.selection.category = id;
-        // با تغییر دسته، جنس و رنگ ریست می‌شوند
-        state.selection.fabric = null;
-        state.selection.color = null;
+  for (const v of variants) {
+    const attrs = v.attributes || {};
+    for (const [groupName, attrVal] of Object.entries(attrs)) {
+      if (groupName.includes("رنگ") || groupName.toLowerCase().includes("color")) {
+        if (!seen.has(attrVal) && v.in_stock !== false) {
+          seen.add(attrVal);
+          colors.push({
+            id: attrVal,
+            fa: attrVal,
+            image: product.image || getDefaultImage(),
+            variant: v,
+          });
+        }
+      }
+    }
+  }
 
-        // بلافاصله به تب جنس برو
-        setActiveTab("material");
-        renderMaterialTab();
-      },
-    });
-    optionsListEl.appendChild(card);
-  });
+  return colors;
 }
 
-function renderMaterialTab() {
+/* ---------------------------- Render Tabs ---------------------------- */
+function renderFabricTab() {
   clearList();
-  const cat = getSelectedCategory();
-  if (!cat) {
-    renderEmptyState("لطفاً ابتدا «دسته‌بندی» را انتخاب کنید.");
-    return;
-  }
-  const fabrics = cat.fabrics ?? [];
-  if (!fabrics.length) return renderEmptyState("پارچه‌ای یافت نشد!");
+  const products = state.products;
+  if (!products.length) return renderEmptyState("محصولی یافت نشد!");
 
-  fabrics.forEach((fab) => {
-    const isSelected = state.selection.fabric === fab.id;
+  products.forEach((p, idx) => {
+    const isSelected = state.selection.fabric === idx;
+    const price = formatFabricPrice(p.price);
+    const img = p.image || getDefaultImage();
     const card = makeOptionCard({
-      id: fab.id,
-      fa: fab.fa,
-      image: fab.image,
+      id: idx,
+      fa: p.title || p.name_fa || "پارچه",
+      image: img,
       isSelected,
-      onClick: ({ id }) => {
-        state.selection.fabric = id;
-        state.selection.color = null; // با تغییر جنس، رنگ ریست شود
-        // بلافاصله به تب رنگ برو
+      price,
+      onClick: () => {
+        state.selection.fabric = idx;
+        state.selection.color = null;
+
+        // Show this fabric on the cloth immediately
+        updateClothTexture(img);
+
+        // Auto-switch to color tab
         setActiveTab("color");
         renderColorTab();
       },
@@ -653,31 +669,36 @@ function renderMaterialTab() {
 
 function renderColorTab() {
   clearList();
-  const fabric = getSelectedFabric();
-  if (!fabric) {
-    renderEmptyState("لطفاً ابتدا «جنس» را انتخاب کنید.");
+  const product = getSelectedProduct();
+  if (!product) {
+    renderEmptyState("لطفاً ابتدا یک پارچه انتخاب کنید.");
     return;
   }
-  const colors = fabric.colors ?? [];
-  if (!colors.length) return renderEmptyState("رنگی یافت نشد!");
 
-  colors.forEach((col) => {
-    const isSelected = state.selection.color === col.id;
+  const colors = getProductColors(product);
+  if (!colors.length) {
+    renderEmptyState("رنگ‌بندی موجود نیست.");
+    return;
+  }
+
+  colors.forEach((col, idx) => {
+    const isSelected = state.selection.color === idx;
     const card = makeOptionCard({
-      id: col.id,
+      id: idx,
       fa: col.fa,
       image: col.image,
       isSelected,
-      onClick: ({ id, card, image }) => {
-        // تک‌گزینه‌ای: ابتدا همه کارت‌های انتخاب‌شده را پاک کن
-        [
-          ...optionsListEl.querySelectorAll(
-            ".dynamic-menu-option-item.selected"
-          ),
-        ].forEach((el) => el.classList.remove("selected"));
-        state.selection.color = id;
+      onClick: ({ card, image }) => {
+        // Deselect all, then select this
+        [...optionsListEl.querySelectorAll(".dynamic-menu-option-item.selected")]
+          .forEach((el) => el.classList.remove("selected"));
+        state.selection.color = idx;
         card.classList.add("selected");
+
+        // Update cloth texture with the color variant image
         updateClothTexture(image);
+
+        // Hide menu after selection
         menuEl.style.display = "none";
         menuToggleBtn.style.display = "flex";
       },
@@ -686,60 +707,95 @@ function renderColorTab() {
   });
 }
 
-/* -------------------------- سوییچر تب‌ها -------------------------- */
+/* -------------------------- Tab Switcher -------------------------- */
 optionTabButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
-    const tab = btn.dataset.option; // category | material | color
+    const tab = btn.dataset.option; // fabric | color
     setActiveTab(tab);
-    if (tab === "category") renderCategoryTab();
-    else if (tab === "material") renderMaterialTab();
+    if (tab === "fabric") renderFabricTab();
     else renderColorTab();
   });
 });
 
-/* -------------------------- بارگذاری جیسون -------------------------- */
-async function loadTaxonomy() {
-  const res = await fetch(TAXONOMY_URL, { cache: "no-store" });
-  if (!res.ok) throw new Error("خطا در دریافت داده");
-  const data = await res.json();
-  // انتظار ساختار { schema_version, locale, taxonomy: { categories: [...] }, ai_recommendations: {...} }
-  state.data = data;
-  setActiveTab("category");
-  renderCategoryTab();
-}
-
-/* ---------------------------- نمایش/ارسال ---------------------------- */
-function getSelectionPayload() {
-  const { category, fabric, color } = state.selection;
-
-  // علاوه بر id، نسخه‌ی فارسی را هم از داده استخراج می‌کنیم
-  const cat = state.data?.taxonomy?.categories?.find((c) => c.id === category);
-  const fab = cat?.fabrics?.find((f) => f.id === fabric);
-  const col = fab?.colors?.find((c) => c.id === color);
-
-  return {
-    category: category ? { id: category, fa: cat?.fa ?? "" } : null,
-    fabric: fabric ? { id: fabric, fa: fab?.fa ?? "" } : null,
-    color: color ? { id: color, fa: col?.fa ?? "" } : null,
-  };
-}
-
-// displayBtn?.addEventListener("click", () => {
-//   const payload = getSelectionPayload();
-//   console.log("Selection to display:", payload);
-//   const cat = payload.category?.fa ?? "—";
-//   const fab = payload.fabric?.fa ?? "—";
-//   const col = payload.color?.fa ?? "—";
-//   alert(`انتخاب فعلی:\nدسته‌بندی: ${cat}\nجنس: ${fab}\nرنگ: ${col}`);
-// });
-
-saveSubmitBtn?.addEventListener("click", async () => {
-  const payload = getSelectionPayload();
-
-  if (!payload.category || !payload.fabric || !payload.color) {
-    alert("لطفاً هر سه مورد «دسته‌بندی»، «جنس» و «رنگ» را انتخاب کنید.");
+/* -------------------- Load AI Recommendations -------------------- */
+async function loadRecommendations() {
+  const uploadId = getUploadId();
+  if (!uploadId) {
+    renderEmptyState("شناسه آپلود یافت نشد.");
     return;
   }
+
+  // Check sessionStorage for pre-fetched data from processing screen
+  let data = null;
+  try {
+    const cached = sessionStorage.getItem("fabric_recommendations");
+    if (cached) {
+      data = JSON.parse(cached);
+      sessionStorage.removeItem("fabric_recommendations");
+    }
+  } catch (e) { /* ignore */ }
+
+  if (!data) {
+    // Fetch from API
+    const headers = { "Content-Type": "application/json" };
+    const token = localStorage.getItem("auth_token");
+    if (token) headers["Authorization"] = "Bearer " + token;
+
+    try {
+      const res = await fetch(apiUrl("/recommendations", "secondary"), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ upload_id: uploadId }),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      data = await res.json();
+    } catch (err) {
+      console.error("Failed to load recommendations:", err);
+      renderEmptyState("خطا در دریافت پیشنهادات. لطفاً صفحه را رفرش کنید.");
+      return;
+    }
+  }
+
+  // Populate state
+  state.products = data.products || [];
+  state.recommendationText = data.recommendations_text || "";
+
+  // Show recommendation text in menu header
+  if (state.recommendationText && fabricRecTextEl) {
+    fabricRecTextEl.textContent = state.recommendationText;
+    fabricRecTextEl.style.display = "block";
+  }
+
+  // Show menu and render fabric tab
+  if (menuEl) menuEl.style.display = "flex";
+  if (menuToggleBtn) menuToggleBtn.style.display = "none";
+  setActiveTab("fabric");
+  renderFabricTab();
+}
+
+/* ---------------------- Submit Selection ---------------------- */
+saveSubmitBtn?.addEventListener("click", async () => {
+  const product = getSelectedProduct();
+  if (!product) {
+    alert("لطفاً ابتدا یک پارچه انتخاب کنید.");
+    return;
+  }
+
+  const colors = getProductColors(product);
+  const selectedColor = state.selection.color !== null ? colors[state.selection.color] : null;
+
+  const payload = {
+    upload_id: getUploadId(),
+    fabric: {
+      id: product.id || product.slug,
+      title: product.title,
+      slug: product.slug,
+    },
+    color: selectedColor ? {
+      id: selectedColor.id,
+      fa: selectedColor.fa,
+    } : null,
+  };
 
   try {
     const res = await fetch(API_SUBMIT_URL, {
@@ -757,98 +813,88 @@ saveSubmitBtn?.addEventListener("click", async () => {
   }
 });
 
-/* ------------------------ پیشنهادات هوش مصنوعی ------------------------ */
+/* -------------------- AI Modal (detail view) -------------------- */
 function openAIModal() {
-  // پرکردن بدنه مودال از ai_recommendations
+  if (!aiModalBody) return;
   aiModalBody.innerHTML = "";
-  const recs = state.data?.ai_recommendations?.recommendations ?? [];
-  if (!recs.length) {
-    const d = document.createElement("div");
-    d.className = "empty-state";
-    d.textContent = "پیشنهادی موجود نیست.";
-    aiModalBody.appendChild(d);
-  } else {
-    recs.forEach((rec) => {
-      const item = document.createElement("div");
-      item.className = "ai-suggestion-item";
 
-      const title = document.createElement("div");
-      title.className = "ai-suggestion-title";
-      title.textContent = rec.title_fa || "پیشنهاد";
-
-      const text = document.createElement("div");
-      text.className = "ai-suggestion-text";
-      text.textContent = rec.text_fa || "";
-
-      const tags = document.createElement("div");
-      tags.className = "ai-suggestion-details";
-
-      const mkTag = (label) => {
-        const el = document.createElement("span");
-        el.className = "ai-suggestion-tag";
-        el.textContent = label;
-        return el;
-      };
-
-      if (rec.category?.fa) tags.appendChild(mkTag(`دسته:${rec.category.fa}`));
-      if (rec.fabric?.fa) tags.appendChild(mkTag(`جنس:${rec.fabric.fa}`));
-      if (rec.color?.fa) tags.appendChild(mkTag(`رنگ:${rec.color.fa}`));
-
-      item.appendChild(title);
-      item.appendChild(text);
-      item.appendChild(tags);
-
-      item.addEventListener("click", () => {
-        // اعمال پیشنهاد
-        state.selection.category = rec.category?.id ?? null;
-        state.selection.fabric = rec.fabric?.id ?? null;
-        state.selection.color = rec.color?.id ?? null;
-
-        // let colorImage = null;
-        //   if(state.data && rec.category?.id && rec.fabric?.id && rec.color?.id ){
-        //   const category = state.data.categories?.find((c)=> c.id === rec.category.id)
-        //   if(category){
-        //     const fabric = category.fabrics?.find((f)=> f.id === rec.fabric.id)
-        //     if(fabric){
-        //       const color = fabric.color?.find((c)=> c.id === rec.color.id)
-        //         if(color && color.image){
-        //           colorImage = color.image
-        //         }
-        //       }
-        //     }
-        //   }
-
-        //   if(colorImage){
-        //     updateClothTexture(colorImage)
-        //   }
-        updateClothTexture(rec.color.image);
-
-        // رفتن به تب رنگ و رندر همان تب (آخرین مرحله)
-        setActiveTab("color");
-        renderColorTab();
-
-        // بستن مودال
-        closeAIModal();
-      });
-
-      aiModalBody.appendChild(item);
-    });
+  if (!state.products.length) {
+    aiModalBody.innerHTML = '<div class="empty-state">پیشنهادی موجود نیست.</div>';
+    aiModal.style.display = "flex";
+    return;
   }
 
+  // Show recommendation text
+  if (state.recommendationText) {
+    const textDiv = document.createElement("div");
+    textDiv.className = "ai-rec-text";
+    textDiv.textContent = state.recommendationText;
+    aiModalBody.appendChild(textDiv);
+  }
+
+  // Product cards
+  const heading = document.createElement("h3");
+  heading.style.cssText = "margin: 16px 0 12px; font-size: 16px; color: #333;";
+  heading.textContent = "پارچه‌های پیشنهادی";
+  aiModalBody.appendChild(heading);
+
+  const grid = document.createElement("div");
+  grid.className = "ai-products-grid";
+
+  state.products.forEach((p) => {
+    const card = document.createElement("div");
+    card.className = "ai-product-card";
+
+    const name = p.title || p.name_fa || "پارچه";
+    const img = p.image || getDefaultImage();
+    const price = formatFabricPrice(p.price);
+    const productUrl = getProductUrl(p);
+
+    let html = `<img src="${img}" alt="${name}" />`;
+    html += `<div class="ai-p-name">${name}</div>`;
+    if (price) html += `<div class="ai-p-price">${price}</div>`;
+    if (p.brand) html += `<div style="font-size:11px;color:#888;margin-top:2px;">${p.brand}</div>`;
+    html += `<button class="ai-p-preview-btn" data-img="${img}">نمایش روی پرچم</button>`;
+    if (productUrl) html += `<a href="${productUrl}" target="_blank" class="ai-p-link">مشاهده محصول</a>`;
+
+    card.innerHTML = html;
+
+    const previewBtn = card.querySelector(".ai-p-preview-btn");
+    if (previewBtn) {
+      previewBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        updateClothTexture(previewBtn.dataset.img);
+        closeAIModal();
+      });
+    }
+
+    const cardImg = card.querySelector("img");
+    if (cardImg) {
+      cardImg.style.cursor = "pointer";
+      cardImg.addEventListener("click", (e) => {
+        e.stopPropagation();
+        updateClothTexture(img);
+        closeAIModal();
+      });
+    }
+
+    grid.appendChild(card);
+  });
+
+  aiModalBody.appendChild(grid);
   aiModal.style.display = "flex";
 }
 
 function closeAIModal() {
-  aiModal.style.display = "none";
+  if (aiModal) aiModal.style.display = "none";
 }
 
-showAIsuggestionBtn?.addEventListener("click", openAIModal);
 aiModalClose?.addEventListener("click", closeAIModal);
 aiModal?.addEventListener("click", (e) => {
   if (e.target === aiModal) closeAIModal();
 });
 
-/* ---------------------- مخفی/نمایش منو (UI موجود) ---------------------- */
+/* ---------------------- Menu show/hide ---------------------- */
 function hideMenu() {
   if (!menuEl) return;
   menuEl.style.display = "none";
@@ -864,12 +910,10 @@ function showMenu() {
 menuCloseBtn?.addEventListener("click", hideMenu);
 menuToggleBtn?.addEventListener("click", showMenu);
 
-/* -------------------- اتصال به OrbitControls (اختیاری) ------------------- */
+/* -------------------- OrbitControls integration ------------------- */
 window.attachOrbitControls = function (controls) {
   if (!controls) return;
   controls.addEventListener("start", hideMenu);
-  // when change end show it again
-  // controls.addEventListener("end", showMenu);
   if (controls?.domElement) {
     const el = controls.domElement;
     const onInteract = () => hideMenu();
@@ -878,16 +922,9 @@ window.attachOrbitControls = function (controls) {
   }
 };
 
-/* ------------------------------- شروع کار ------------------------------- */
-loadTaxonomy().catch((err) => {
-  console.error("خطا در بارگذاری taxonomy:", err);
+/* ------------------------------- Init ------------------------------- */
+loadRecommendations().catch((err) => {
+  console.error("خطا در بارگذاری پیشنهادات:", err);
   clearList();
   renderEmptyState("مشکل در دریافت داده‌ها. لطفاً دوباره تلاش کنید.");
 });
-
-setTimeout(() => {
-  const warningNotice = document.getElementById("warningNotice");
-  if (warningNotice && !warningNotice.classList.contains("hidden")) {
-    warningNotice.classList.add("hidden");
-  }
-}, 5000);

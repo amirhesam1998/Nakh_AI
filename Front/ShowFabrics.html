@@ -8,21 +8,9 @@
       content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0"
     />
     <link type="text/css" rel="stylesheet" href="./css/style.css" />
-    <!-- <link
-      rel="icon"
-      type="image/png"
-      href="./image/logo.png"
-    /> -->
   </head>
 
   <body>
-    <!-- Warning notice for user -->
-    <div class="warning-notice" id="warningNotice">
-      <div class="warning-content">
-        <span>پس از انتخاب گزینه‌های خود، حتماً روی دکمه "ثبت و ارسال"  کلیک کنید</span>
-      </div>
-    </div>
-
     <!-- menu toggle button for when menu is hidden -->
     <button class="menu-toggle-btn" id="menuToggleBtn" >
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -43,18 +31,18 @@
         </button>
       </div>
 
+      <!-- AI recommendation text -->
+      <div class="fabric-rec-text" id="fabricRecText" style="display:none;"></div>
+
       <div class="dynamic-menu-options-btn">
-        <button data-option="category">دسته بندی</button>
-        <button data-option="material">جنس</button>
+        <button data-option="fabric" class="active">پارچه</button>
         <button data-option="color">رنگ</button>
       </div>
 	  <div class="dynamic-menu-options-list" id="optionsList">
-        <div class="empty-state">یک گزینه را انتخاب کنید</div>
+        <div class="empty-state">در حال بارگذاری پیشنهادات...</div>
 	  </div>
 	  <div class="dynamic-menu-submit-btn">
-		<!-- <button id="displayBtn">نمایش</button> -->
 		<button id="saveSubmitBtn">ثبت و ارسال</button>
-		<button id="showAIsuggestion">پیشنهادات هوش مصنوعی</button>
 	  </div>
     </div>
 

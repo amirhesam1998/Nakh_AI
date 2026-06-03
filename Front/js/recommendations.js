@@ -76,7 +76,8 @@
     function buildProductCard(p) {
       var name  = p.title || p.name_fa || p.name || "محصول";
       var brand = p.brand || "";
-      var img   = p.image || "";
+      var shopBase = (window.API_CONFIG.BASE_URL || "").replace(/\/api\/v1\/?$/, "");
+      var img   = p.image || (shopBase ? shopBase + "/no-image-product.png" : "");
       var cat   = p.category || "";
       var matchedSize = p.matched_size || "";
       var matchedVariant = p.matched_variant || null;
