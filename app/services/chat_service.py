@@ -10,6 +10,7 @@ Handles:
 
 Storage: JSON files under media/chat/ (no Redis required).
 """
+import asyncio
 import json
 import logging
 import re
@@ -17,6 +18,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+import httpx
 
 # Per-message cap. Anything longer is truncated before storage / prompting.
 _MAX_USER_MESSAGE_CHARS = 2000
@@ -104,16 +107,118 @@ def _read_json_list(path: Path) -> list:
         return []
 
 
+# ---- Internal API backend (MySQL via Laravel) ----
+
+class _InternalAPIBackend:
+    """Stores chat sessions and messages via Laravel internal API.
+
+    Used when ``INTERNAL_API_URL`` is set.  Falls back silently to
+    JSON files if an API call fails.
+    """
+
+    def __init__(self, base_url: str, api_key: str):
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self._base_url,
+                headers={
+                    "X-Internal-Key": self._api_key,
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0),
+            )
+        return self._client
+
+    async def close(self) -> None:
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+
+    async def create_session(self, user_id: str, **kwargs) -> Optional[dict]:
+        try:
+            client = await self._get_client()
+            resp = await client.post(
+                f"/api/internal/users/{user_id}/chat-sessions",
+                json=kwargs,
+            )
+            resp.raise_for_status()
+            return resp.json().get("data") or resp.json()
+        except Exception as e:
+            logger.warning("Internal API create_session failed: %s", e)
+            return None
+
+    async def get_session(self, session_uuid: str) -> Optional[dict]:
+        try:
+            client = await self._get_client()
+            resp = await client.get(f"/api/internal/chat-sessions/{session_uuid}")
+            resp.raise_for_status()
+            return resp.json().get("data") or resp.json()
+        except Exception as e:
+            logger.debug("Internal API get_session failed: %s", e)
+            return None
+
+    async def list_sessions(self, user_id: str) -> list[dict]:
+        try:
+            client = await self._get_client()
+            resp = await client.get(f"/api/internal/users/{user_id}/chat-sessions")
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("data") if isinstance(data.get("data"), list) else []
+        except Exception as e:
+            logger.debug("Internal API list_sessions failed: %s", e)
+            return []
+
+    async def append_message(self, session_uuid: str, role: str, content: str) -> bool:
+        try:
+            client = await self._get_client()
+            resp = await client.post(
+                f"/api/internal/chat-sessions/{session_uuid}/messages",
+                json={"role": role, "content": content},
+            )
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.warning("Internal API append_message failed: %s", e)
+            return False
+
+    async def save_measurements(self, user_id: str, measurements: dict) -> bool:
+        try:
+            client = await self._get_client()
+            resp = await client.post(
+                f"/api/internal/users/{user_id}/measurements",
+                json=measurements,
+            )
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.warning("Internal API save_measurements failed: %s", e)
+            return False
+
+
 # ------------------------------------------------------------------
 
 
 class ChatService:
     """
     Main chat service that orchestrates the chatbot functionality.
+
+    When ``INTERNAL_API_URL`` is configured, sessions and messages are
+    stored via the Laravel internal API (MySQL).  Otherwise, JSON files
+    under ``media/chat/`` are used as the storage backend.
     """
 
     def __init__(self):
         self.context_builder = ContextBuilder(language="fa")
+        internal_url = getattr(settings, "internal_api_url", "") or ""
+        internal_key = getattr(settings, "internal_api_key", "") or ""
+        self._api: Optional[_InternalAPIBackend] = (
+            _InternalAPIBackend(internal_url, internal_key) if internal_url else None
+        )
 
     # ---- Session management (JSON-backed) ----
 
@@ -126,6 +231,26 @@ class ChatService:
         session_id = str(uuid.uuid4())
         now = datetime.utcnow()
 
+        # Try internal API first
+        if self._api:
+            api_data = await self._api.create_session(
+                user_id,
+                uuid=session_id,
+                include_measurements=include_measurements,
+                preferred_language=preferred_language,
+            )
+            if api_data:
+                logger.info("Created chat session %s via internal API", session_id)
+                return ChatSessionResponse(
+                    session_id=api_data.get("uuid", session_id),
+                    user_id=user_id,
+                    created_at=now,
+                    message_count=0,
+                    include_measurements=include_measurements,
+                    preferred_language=preferred_language,
+                )
+
+        # Fallback: JSON file
         session_data = {
             "session_id": session_id,
             "user_id": user_id,
@@ -156,6 +281,20 @@ class ChatService:
         )
 
     async def get_session(self, session_id: str) -> Optional[ChatSessionResponse]:
+        # Try internal API first
+        if self._api:
+            api_data = await self._api.get_session(session_id)
+            if api_data:
+                return ChatSessionResponse(
+                    session_id=api_data.get("uuid", session_id),
+                    user_id=str(api_data.get("user_id", "")),
+                    created_at=datetime.fromisoformat(api_data["created_at"]) if "created_at" in api_data else datetime.utcnow(),
+                    message_count=api_data.get("message_count", 0),
+                    include_measurements=api_data.get("include_measurements", True),
+                    preferred_language=api_data.get("preferred_language", "fa"),
+                )
+
+        # Fallback: JSON file
         data = _read_json(_session_path(session_id))
         if not data:
             return None
@@ -273,7 +412,10 @@ class ChatService:
             )
 
         try:
-            response = llm_manager.chat(
+            # llm_manager.chat() is synchronous (blocking httpx to Ollama).
+            # Run in thread to avoid blocking the async event loop.
+            response = await asyncio.to_thread(
+                llm_manager.chat,
                 messages=messages,
                 system_prompt=system_prompt,
                 max_new_tokens=512,
@@ -303,6 +445,13 @@ class ChatService:
     # ---- JSON-backed message storage ----
 
     async def _store_message(self, session_id: str, message: ChatMessage) -> None:
+        # Try internal API first
+        if self._api:
+            ok = await self._api.append_message(session_id, message.role.value, message.content)
+            if ok:
+                return
+
+        # Fallback: JSON file
         path = _session_path(session_id)
         data = _read_json(path) or {}
         messages = data.get("messages", [])

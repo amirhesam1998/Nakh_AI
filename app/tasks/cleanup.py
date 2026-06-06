@@ -70,3 +70,32 @@ def _cleanup_old_media_files_impl(days_old: int = 7) -> Dict[str, Any]:
         "deleted_count": deleted_count,
         "deleted_size_mb": deleted_size_mb,
     }
+
+
+# ── Recalibration task ──
+
+if settings.celery_enabled:
+    @celery_app.task
+    def run_recalibration() -> Dict[str, Any]:
+        """Weekly batch recalibration from purchase fit feedback."""
+        return _run_recalibration_impl()
+else:
+    def run_recalibration() -> Dict[str, Any]:
+        """Synchronous fallback when Celery is disabled."""
+        return _run_recalibration_impl()
+
+    run_recalibration.delay = run_recalibration
+    run_recalibration.apply_async = lambda *a, **kw: run_recalibration(*a, **kw)
+
+
+def _run_recalibration_impl() -> Dict[str, Any]:
+    """Run the recalibration batch job."""
+    try:
+        from scripts.recalibrate import recalibrate
+        updated = recalibrate(dry_run=False)
+        total = sum(len(v) for v in updated.values())
+        logger.info("Recalibration complete: %d offset(s) in %d group(s)", total, len(updated))
+        return {"groups_updated": len(updated), "offsets_updated": total}
+    except Exception as e:
+        logger.error("Recalibration failed: %s", e)
+        return {"error": str(e)}

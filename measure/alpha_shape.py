@@ -90,6 +90,8 @@ def alpha_shape_perimeter(
     perimeter = sum(
         np.linalg.norm(pts[e[0]] - pts[e[1]]) for e in boundary_edges
     )
+
+
     return float(perimeter) if perimeter > 0 else np.nan
 
 

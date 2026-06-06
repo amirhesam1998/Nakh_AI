@@ -4,6 +4,7 @@ Product recommendation endpoint.
 Combines body measurements + questionnaire answers + product catalog
 and asks the LLM for personalized recommendations in Persian.
 """
+import asyncio
 import json
 import logging
 import re
@@ -598,6 +599,9 @@ async def get_recommendations(
         prompt_products = products[:effective_max_in_prompt]
 
         # Build LLM prompt and generate
+        # NOTE: llm_manager.generate() is synchronous (blocking httpx call to
+        # Ollama).  We MUST run it in a thread so it doesn't block the async
+        # event loop — otherwise the entire server freezes for 60-120 s.
         raw_response = ""
         try:
             from app.services.llm import llm_manager
@@ -609,7 +613,8 @@ async def get_recommendations(
                 )
                 # Scale tokens for multi-product (more types → more commentary needed)
                 max_tokens = 2048 + (512 * max(num_types - 1, 0))
-                response = llm_manager.generate(
+                response = await asyncio.to_thread(
+                    llm_manager.generate,
                     prompt=prompt,
                     max_new_tokens=min(max_tokens, 4096),
                     temperature=0.7,

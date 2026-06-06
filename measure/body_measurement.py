@@ -11,6 +11,7 @@ import numpy as np
 from scipy.spatial import ConvexHull
 
 from measure.alpha_shape import alpha_shape_perimeter
+from measure.bmi_scaling import get_width_scale, get_uniform_width_scale
 
 
 class BodyMeasurement:
@@ -318,25 +319,40 @@ class BodyMeasurement:
         user_height_cm: float,
         gender: str = "male",
         width_scale: float = 0.75,
+        bmi: float | None = None,
+        body_type: str | None = None,
     ) -> dict:
         """Main measurement pipeline.
 
-        Mesh is uniformly scaled to the user's height; `width_scale` is
-        applied to circumference outputs only (not to lengths), so the
-        cross-section frames used for limb circumferences stay isotropic.
+        Mesh is uniformly scaled to the user's height.  Per-measurement
+        BMI width scaling is applied to circumferences only (not to
+        lengths), so the cross-section frames stay isotropic.
+
+        If *bmi* is provided, per-measurement lookup-table scaling is
+        used (see ``bmi_scaling.py``).  Otherwise the legacy uniform
+        *width_scale* is applied.
         """
         V, J, s = cls._rescale_to_user_height(vertices, joints, user_height_cm / 100.0)
         res = cls._measure_core(V, J)
-        ws = float(width_scale)
-        for k in cls._CIRCUM_KEYS:
-            v = res.get(k)
-            if v is not None and isinstance(v, (int, float)) and np.isfinite(v):
-                res[k] = float(v) * ws
+
+        if bmi is not None:
+            ws_summary = get_uniform_width_scale(bmi, gender, body_type)
+            for k in cls._CIRCUM_KEYS:
+                v = res.get(k)
+                if v is not None and isinstance(v, (int, float)) and np.isfinite(v):
+                    res[k] = float(v) * get_width_scale(k, bmi, gender, body_type)
+        else:
+            ws_summary = float(width_scale)
+            for k in cls._CIRCUM_KEYS:
+                v = res.get(k)
+                if v is not None and isinstance(v, (int, float)) and np.isfinite(v):
+                    res[k] = float(v) * ws_summary
+
         res.update({
             "gender": gender,
             "user_height_cm": float(user_height_cm),
             "scale_factor": float(s),
-            "width_scale": ws,
+            "width_scale": ws_summary,
         })
         return res
 
@@ -346,7 +362,9 @@ class BodyMeasurement:
         npz_path: str,
         user_height_cm: float,
         gender: str = "male",
-        width_scale: float = 0.75
+        width_scale: float = 0.75,
+        bmi: float | None = None,
+        body_type: str | None = None,
     ) -> dict:
         """Load NPZ and run measurement pipeline."""
         data = np.load(npz_path, allow_pickle=True)
@@ -354,7 +372,10 @@ class BodyMeasurement:
             raise ValueError(f"Invalid npz: {npz_path}")
         vertices = np.asarray(data["vertices"])
         joints = np.asarray(data["joints"])
-        return cls.measure_pipeline(vertices, joints, user_height_cm, gender, width_scale)
+        return cls.measure_pipeline(
+            vertices, joints, user_height_cm, gender, width_scale,
+            bmi=bmi, body_type=body_type,
+        )
 
     @classmethod
     def measure_consensus(
@@ -364,11 +385,17 @@ class BodyMeasurement:
         user_height_cm: float,
         gender: str = "male",
         width_scale: float = 1.0,
+        bmi: float | None = None,
+        body_type: str | None = None,
     ) -> dict:
         """Measure from a consensus SMPL mesh (45-joint format).
 
         This is the primary measurement path for the consensus-mesh pipeline.
         It uses SMPL's native joint ordering instead of PARE/OpenPose ordering.
+
+        If *bmi* is provided, per-measurement lookup-table scaling is
+        used (see ``bmi_scaling.py``).  Otherwise the legacy uniform
+        *width_scale* is applied.
         """
         # Scale to real height
         V, J, s = cls._rescale_to_user_height(vertices, joints, user_height_cm / 100.0)
@@ -377,18 +404,25 @@ class BodyMeasurement:
         mp = cls._joint_map_smpl()
         res = cls._measure_core_impl(V, J, mp)
 
-        # Apply soft BMI width_scale to circumferences only
-        ws = float(width_scale)
-        for k in cls._CIRCUM_KEYS:
-            v = res.get(k)
-            if v is not None and isinstance(v, (int, float)) and np.isfinite(v):
-                res[k] = float(v) * ws
+        # Apply per-measurement BMI width scaling to circumferences only
+        if bmi is not None:
+            ws_summary = get_uniform_width_scale(bmi, gender, body_type)
+            for k in cls._CIRCUM_KEYS:
+                v = res.get(k)
+                if v is not None and isinstance(v, (int, float)) and np.isfinite(v):
+                    res[k] = float(v) * get_width_scale(k, bmi, gender, body_type)
+        else:
+            ws_summary = float(width_scale)
+            for k in cls._CIRCUM_KEYS:
+                v = res.get(k)
+                if v is not None and isinstance(v, (int, float)) and np.isfinite(v):
+                    res[k] = float(v) * ws_summary
 
         res.update({
             "gender": gender,
             "user_height_cm": float(user_height_cm),
             "scale_factor": float(s),
-            "width_scale": ws,
+            "width_scale": ws_summary,
         })
         return res
 

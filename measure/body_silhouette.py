@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")  # non-GUI backend — prevents Tkinter errors in server
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 

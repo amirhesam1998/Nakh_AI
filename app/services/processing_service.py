@@ -289,6 +289,7 @@ class ProcessingService:
                         user_height_cm=user_height_cm,
                         gender=gender,
                         width_scale=width_scale,
+                        bmi=bmi,
                     )
                     per_view_results.append(res)
                     fname = fpath.name.lower()

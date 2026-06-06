@@ -100,6 +100,18 @@ class Settings(BaseSettings):
     ecommerce_api_key: str = ""
     auth_cache_ttl_seconds: int = 300
 
+    # Meilisearch — attribute-based product search.
+    # When set, product recommendations query Meilisearch instead of CMS
+    # for attribute filtering (occasion, season, color, style, etc.).
+    meilisearch_url: str = ""
+    meilisearch_key: str = ""
+
+    # Internal Laravel API — shared secret for FastAPI ↔ Laravel communication.
+    # When set, chat sessions and measurements are persisted via Laravel MySQL
+    # instead of local JSON files / Redis.
+    internal_api_url: str = ""
+    internal_api_key: str = ""
+
     # Server bind (used when running `python -m app.main` directly)
     server_host: str = "0.0.0.0"
     server_port: int = 8000

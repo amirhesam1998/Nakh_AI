@@ -1,5 +1,9 @@
 """
 Ollama LLM provider — calls a local Ollama server via its HTTP API.
+
+Uses /api/chat (chat completion with roles) instead of /api/generate
+because instruct-tuned models perform significantly better when given
+system + user message roles rather than a raw prompt string.
 """
 import logging
 from typing import Optional
@@ -11,7 +15,7 @@ from .base import BaseLLMProvider, LLMResponse
 logger = logging.getLogger(__name__)
 
 # Generous timeout: CPU inference on large models can be slow.
-_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
+_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -84,12 +88,41 @@ class OllamaProvider(BaseLLMProvider):
         repetition_penalty: float = 1.1,
         stop_sequences: Optional[list[str]] = None,
     ) -> LLMResponse:
+        """Generate text using Ollama's /api/chat endpoint.
+
+        The prompt is split into a system message (first paragraph) and a
+        user message (the rest) to leverage the chat template of instruct
+        models.  If the prompt doesn't naturally split, it's sent entirely
+        as the user message.
+        """
         if not self._client:
             raise RuntimeError("OllamaProvider not loaded. Call load_model() first.")
 
+        # Split prompt into system + user for better instruction following.
+        # Convention: everything before the first "---" line is the system
+        # message; everything after is the user message.
+        system_msg = ""
+        user_msg = prompt
+        separator_idx = prompt.find("\n---")
+        if separator_idx > 0:
+            system_msg = prompt[:separator_idx].strip()
+            user_msg = prompt[separator_idx:].strip()
+        # If no separator, try first paragraph as system
+        elif "\n\n" in prompt:
+            first_break = prompt.index("\n\n")
+            # Only use first paragraph as system if it's reasonably short
+            if first_break < 500:
+                system_msg = prompt[:first_break].strip()
+                user_msg = prompt[first_break:].strip()
+
+        messages = []
+        if system_msg:
+            messages.append({"role": "system", "content": system_msg})
+        messages.append({"role": "user", "content": user_msg})
+
         payload: dict = {
             "model": self.model_path,
-            "prompt": prompt,
+            "messages": messages,
             "stream": False,
             "options": {
                 "num_predict": max_new_tokens,
@@ -103,11 +136,11 @@ class OllamaProvider(BaseLLMProvider):
             payload["options"]["stop"] = stop_sequences
 
         try:
-            resp = self._client.post("/api/generate", json=payload)
+            resp = self._client.post("/api/chat", json=payload)
             resp.raise_for_status()
             data = resp.json()
 
-            text = data.get("response", "").strip()
+            text = (data.get("message") or {}).get("content", "").strip()
             tokens = data.get("eval_count", 0)
             done_reason = data.get("done_reason", "stop")
 
@@ -119,7 +152,7 @@ class OllamaProvider(BaseLLMProvider):
             )
 
         except httpx.HTTPError as exc:
-            logger.error("Ollama generation failed: %s", exc)
+            logger.error("Ollama chat generation failed: %s", exc)
             return LLMResponse(
                 text="",
                 tokens_used=0,

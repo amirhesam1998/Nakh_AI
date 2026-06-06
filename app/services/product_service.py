@@ -3,8 +3,14 @@ Product service for fetching and recommending products.
 
 This service interfaces with the external PHP shop API
 to fetch products and generate recommendations.
+
+3-stage recommendation pipeline:
+  Stage 1 — CMS query: category + subcategory + gender + price (safe, fast)
+  Stage 2 — Python scoring: rank by attribute match (style, occasion, season, color, size)
+  Stage 3 — LLM ranking: final pick + narrative (in recommendations.py)
 """
 import logging
+import re
 from typing import Optional
 import httpx
 
@@ -13,14 +19,148 @@ from app.schemas.chat import ProductRecommendation, UserPreferences
 
 logger = logging.getLogger(__name__)
 
+# ── Stage 2: attribute key mapping ──
+# Maps questionnaire answer keys → possible CMS variant attribute names (Persian + English).
+_ATTR_KEY_MAP: dict[str, list[str]] = {
+    "style":    ["استایل", "سبک", "style"],
+    "occasion": ["مناسبت", "مناسبت ها", "مناسبت‌ها", "occasion"],
+    "season":   ["فصل", "season"],
+    "colors":   ["رنگ", "color"],
+    "size":     ["سایز", "اندازه", "size"],
+    "material": ["جنس", "جنس پارچه", "material"],
+    "pattern":  ["طرح", "pattern"],
+    "weave":    ["بافت", "weave"],
+    "usage":    ["کاربرد", "usage"],
+}
+
+# Score weights per attribute (total = 1.0 when all match)
+_ATTR_WEIGHTS: dict[str, float] = {
+    "style":    0.25,
+    "occasion": 0.20,
+    "season":   0.15,
+    "colors":   0.15,
+    "size":     0.15,
+    "material": 0.05,
+    "pattern":  0.03,
+    "weave":    0.01,
+    "usage":    0.01,
+}
+
+# How many products to fetch from CMS (broad pool for scoring)
+_CMS_FETCH_LIMIT = 40
+# How many top-scored products to return for the LLM
+_RETURN_LIMIT = 20
+
+
+def _tokenise(text: str) -> set[str]:
+    """Split a Persian/English string on commas (both ، and ,) and whitespace.
+
+    Returns a set of stripped, non-empty lowercase tokens.
+    """
+    # Replace Persian comma with standard comma, then split
+    parts = re.split(r"[,،]", str(text))
+    tokens: set[str] = set()
+    for part in parts:
+        t = part.strip().lower()
+        if t and t != "-":
+            tokens.add(t)
+    return tokens
+
+
+def _extract_product_attrs(product: dict) -> dict[str, set[str]]:
+    """Extract all attribute values from product variants + specifications.
+
+    Returns {questionnaire_key: {value1, value2, ...}}.
+    """
+    result: dict[str, set[str]] = {}
+
+    # Keys to skip entirely (not useful for scoring)
+    skip_keys = {"جنسیت", "gender", "فیت", "fit", "ویژگی ها", "ویژگی‌ها"}
+
+    def _ingest(key: str, val: str) -> None:
+        key_stripped = key.strip() if key else ""
+        if key_stripped in skip_keys:
+            return
+        key_lower = key_stripped.lower()
+        for qkey, persian_keys in _ATTR_KEY_MAP.items():
+            if any(pk in key_lower for pk in persian_keys):
+                result.setdefault(qkey, set()).update(_tokenise(val))
+                return
+
+    # From variant attributes
+    for variant in product.get("variants") or []:
+        for attr_key, attr_val in (variant.get("attributes") or {}).items():
+            _ingest(attr_key, str(attr_val))
+
+    # From top-level specifications
+    for spec_key, spec_val in (product.get("specifications") or {}).items():
+        _ingest(spec_key, str(spec_val))
+
+    return result
+
+
+def _normalise_answer(val) -> set[str]:
+    """Convert an answer value (string, list, or None) to a token set."""
+    if val is None:
+        return set()
+    if isinstance(val, list):
+        combined: set[str] = set()
+        for item in val:
+            combined.update(_tokenise(str(item)))
+        return combined
+    return _tokenise(str(val))
+
+
+def score_product_relevance(product: dict, answers: dict) -> float:
+    """Score a product 0.0–1.0 based on how well it matches questionnaire answers.
+
+    Used as Stage 2 of the recommendation pipeline: products fetched broadly
+    from the CMS are scored and sorted so the LLM receives the most relevant
+    ones first.
+    """
+    product_attrs = _extract_product_attrs(product)
+    if not product_attrs and not answers:
+        return 0.0
+
+    total_weight = 0.0
+    matched_weight = 0.0
+
+    for qkey, weight in _ATTR_WEIGHTS.items():
+        user_tokens = _normalise_answer(answers.get(qkey))
+        if not user_tokens:
+            continue  # user didn't express a preference — skip, don't penalise
+
+        product_tokens = product_attrs.get(qkey, set())
+        if not product_tokens:
+            # Product has no data for this attribute — small penalty
+            total_weight += weight
+            continue
+
+        total_weight += weight
+
+        # Check overlap: any user token is a substring of a product token or vice-versa
+        hit = False
+        for ut in user_tokens:
+            for pt in product_tokens:
+                if ut in pt or pt in ut:
+                    hit = True
+                    break
+            if hit:
+                break
+
+        if hit:
+            matched_weight += weight
+
+    return matched_weight / total_weight if total_weight > 0 else 0.0
+
 
 class ProductService:
     """
     Service for product operations.
 
     Handles:
-    - Fetching products from external PHP API
-    - Filtering products based on criteria
+    - Fetching products from external PHP API or Meilisearch
+    - Scoring and ranking by attribute match
     - Generating product recommendations
     """
 
@@ -28,6 +168,10 @@ class ProductService:
         self.api_base_url = getattr(settings, "shop_api_url", "") or getattr(settings, "SHOP_API_URL", "")
         self.api_key = getattr(settings, "shop_api_key", "") or getattr(settings, "SHOP_API_KEY", "")
         self._client: Optional[httpx.AsyncClient] = None
+        # Meilisearch config
+        self._meili_url = getattr(settings, "meilisearch_url", "") or ""
+        self._meili_key = getattr(settings, "meilisearch_key", "") or ""
+        self._meili_client: Optional[httpx.AsyncClient] = None
 
     @staticmethod
     def _extract_products(data) -> list[dict]:
@@ -79,8 +223,6 @@ class ProductService:
             resp = await client.get("/api/v1/health", timeout=3.0)
             return resp.status_code < 500
         except Exception:
-            # Any endpoint returning anything means CMS is up
-            # Try the base URL as fallback
             try:
                 client = await self._get_client()
                 resp = await client.get("/", timeout=3.0)
@@ -88,11 +230,103 @@ class ProductService:
             except Exception:
                 return False
 
+    async def _get_meili_client(self) -> httpx.AsyncClient:
+        """Get or create Meilisearch HTTP client."""
+        if self._meili_client is None:
+            headers = {"Content-Type": "application/json"}
+            if self._meili_key:
+                headers["Authorization"] = f"Bearer {self._meili_key}"
+            self._meili_client = httpx.AsyncClient(
+                base_url=self._meili_url,
+                headers=headers,
+                timeout=httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=5.0),
+            )
+        return self._meili_client
+
+    @property
+    def meilisearch_enabled(self) -> bool:
+        """Whether Meilisearch is configured."""
+        return bool(self._meili_url)
+
+    async def search_meilisearch(
+        self,
+        answers: dict,
+        gender: str = "",
+        limit: int = 40,
+    ) -> list[dict] | None:
+        """Search products via Meilisearch with attribute filters.
+
+        Returns a list of product dicts, or None if Meilisearch is not
+        configured or the query fails (caller should fall back to CMS).
+        """
+        if not self._meili_url:
+            return None
+
+        filters: list[str] = []
+
+        category = answers.get("category", "").lower()
+        if category in ("garment", "پوشاک"):
+            filters.append('category = "garment"')
+        elif category in ("fabric", "پارچه"):
+            filters.append('category = "fabric"')
+
+        subcategory = (
+            answers.get("garmentType")
+            or answers.get("fabricType")
+            or answers.get("type")
+            or ""
+        )
+        if subcategory:
+            filters.append(f'subcategory = "{subcategory}"')
+
+        if gender:
+            filters.append(f'gender = "{gender}"')
+
+        # Attribute filters — safe in Meilisearch (unlike CMS)
+        attr_filter_map = {
+            "occasion": "attributes.occasion",
+            "season":   "attributes.season",
+            "colors":   "attributes.color",
+            "style":    "attributes.style",
+            "material": "attributes.material",
+        }
+        for answer_key, meili_field in attr_filter_map.items():
+            val = answers.get(answer_key)
+            if val:
+                if isinstance(val, list):
+                    val = val[0]  # use first value for filter
+                filters.append(f'{meili_field} = "{val}"')
+
+        # Price range
+        if answers.get("minPrice"):
+            filters.append(f'price >= {answers["minPrice"]}')
+        if answers.get("maxPrice"):
+            filters.append(f'price <= {answers["maxPrice"]}')
+
+        try:
+            client = await self._get_meili_client()
+            payload = {"limit": limit}
+            if filters:
+                payload["filter"] = " AND ".join(filters)
+
+            logger.info("Meilisearch query: %s", payload)
+            resp = await client.post("/indexes/products/search", json=payload)
+            resp.raise_for_status()
+            hits = resp.json().get("hits", [])
+            logger.info("Meilisearch returned %d hits", len(hits))
+            return hits
+        except Exception as e:
+            logger.warning("Meilisearch query failed (%s: %s), falling back to CMS", type(e).__name__, e)
+            return None
+
     async def close(self):
-        """Close the HTTP client."""
+        """Close HTTP clients."""
         if self._client:
             await self._client.aclose()
             self._client = None
+        if self._meili_client:
+            await self._meili_client.aclose()
+            self._meili_client = None
 
     async def fetch_products(
         self,
@@ -103,20 +337,7 @@ class ProductService:
         limit: int = 20,
         offset: int = 0,
     ) -> list[dict]:
-        """
-        Fetch products from the PHP shop API.
-
-        Args:
-            category: Filter by category
-            search_query: Search in product names/descriptions
-            min_price: Minimum price filter
-            max_price: Maximum price filter
-            limit: Number of products to fetch
-            offset: Pagination offset
-
-        Returns:
-            List of product dictionaries
-        """
+        """Fetch products from the PHP shop API."""
         if not self.api_base_url:
             logger.warning("SHOP_API_URL not configured, returning mock data")
             return self._get_mock_products()
@@ -162,31 +383,60 @@ class ProductService:
         calculated_size: str = "",
     ) -> tuple[list[dict], str]:
         """
-        Fetch products filtered by questionnaire answers from the Laravel API.
+        Fetch products for recommendation (Stage 1 + Stage 2).
 
-        Returns (products, source) where source is one of:
-          - "shop"    – real catalog response from the CMS
-          - "mock"    – mock fallback (CMS unreachable / unconfigured / empty)
+        Stage 1 — CMS query with safe, fast filters only:
+          category, subcategory, gender, price range.
+          (occasion/season/color/size filters are known to hang the CMS)
+
+        Stage 2 — Python-side scoring:
+          Score each product by attribute match (style, occasion, season,
+          color, size, material, pattern) against the questionnaire answers.
+          Sort by score descending so the LLM (Stage 3) sees the most
+          relevant products first.
+
+        Returns (products, source) where source is "shop" or "mock".
         """
-        if not self.api_base_url:
-            logger.warning("SHOP_API_URL not configured, returning mock data")
+        if not self.api_base_url and not self.meilisearch_enabled:
+            logger.warning("Neither SHOP_API_URL nor MEILISEARCH_URL configured, returning mock data")
             return self._get_mock_products(), "mock"
 
         try:
+            # ── Stage 1a: Try Meilisearch first (if configured) ──
+            if self.meilisearch_enabled:
+                meili_results = await self.search_meilisearch(answers, gender, limit=_CMS_FETCH_LIMIT)
+                if meili_results:
+                    # Meilisearch already filters by attributes — still run Python scoring
+                    scored = [(score_product_relevance(p, answers), p) for p in meili_results]
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    sorted_products = [p for _, p in scored]
+                    if scored:
+                        logger.info(
+                            "Meilisearch+scoring: %d products, top=%.2f avg=%.2f",
+                            len(scored), scored[0][0],
+                            sum(s for s, _ in scored) / len(scored),
+                        )
+                    return sorted_products[:_RETURN_LIMIT], "shop"
+                # Meilisearch returned empty or failed — fall through to CMS
+                logger.info("Meilisearch returned no results, falling back to CMS")
+
+            if not self.api_base_url:
+                logger.warning("SHOP_API_URL not configured, returning mock data")
+                return self._get_mock_products(), "mock"
+
             client = await self._get_client()
 
-            params: dict = {"limit": 20}
+            # ── Stage 1b: CMS query with structural filters only ──
+            params: dict = {"limit": _CMS_FETCH_LIMIT}
 
-            # Map category answer
+            # Map category
             category = answers.get("category", "").lower()
             if category in ("garment", "پوشاک"):
                 params["category"] = "garment"
             elif category in ("fabric", "پارچه"):
                 params["category"] = "fabric"
 
-            # Subcategory filter — the garmentType/fabricType value is a
-            # category slug from the CMS (e.g. the slug for "شلوار").
-            # This tells the CMS to filter products to that specific category.
+            # Subcategory (product type slug)
             subcategory = (
                 answers.get("garmentType")
                 or answers.get("fabricType")
@@ -196,33 +446,19 @@ class ProductService:
             if subcategory:
                 params["subcategory"] = subcategory
 
-            # Gender filter
+            # Gender
             if gender:
                 params["gender"] = gender
 
-            # ── Only send lightweight filters to the CMS ──
-            # The CMS endpoint can hang/timeout with too many attribute filters.
-            # We send category + subcategory + gender (essential for the SQL query)
-            # and let the LLM do the attribute matching from the broader result set.
-            #
-            # Optionally include size if it's a simple value (not multi-value).
-            if calculated_size and "," not in calculated_size:
-                params["size"] = calculated_size.strip()
-
-            # Price filters are safe — they're simple numeric range queries
+            # Price range (simple numeric — safe for CMS)
             if answers.get("minPrice"):
                 params["min_price"] = answers["minPrice"]
             if answers.get("maxPrice"):
                 params["max_price"] = answers["maxPrice"]
 
-            logger.warning(
-                "Recommendation request params: %s",
-                params
-            )
+            logger.info("Stage 1 — CMS query params: %s", params)
 
-            # Use a shorter per-request timeout so relaxation doesn't chain 30s waits
             req_timeout = 15.0
-
             response = await client.get(
                 "/api/v1/products/for-recommendation", params=params,
                 timeout=req_timeout,
@@ -231,35 +467,52 @@ class ProductService:
 
             data = response.json()
             products = self._extract_products(data)
-            if products:
-                return products, "shop"
 
-            # Relaxation: if no products, try without size, then without subcategory
-            relaxable = ["size", "min_price", "max_price", "subcategory"]
-            while not products and any(k in params for k in relaxable):
-                for key in relaxable:
-                    if key in params:
-                        logger.info("No products found, retrying without %s=%s", key, params[key])
-                        params.pop(key)
+            # Relaxation: if empty, drop filters progressively
+            if not products:
+                relaxable = ["min_price", "max_price", "subcategory"]
+                while not products and any(k in params for k in relaxable):
+                    for key in relaxable:
+                        if key in params:
+                            logger.info("No products, retrying without %s=%s", key, params[key])
+                            params.pop(key)
+                            break
+                    try:
+                        response = await client.get(
+                            "/api/v1/products/for-recommendation", params=params,
+                            timeout=req_timeout,
+                        )
+                        response.raise_for_status()
+                        data = response.json()
+                        products = self._extract_products(data)
+                    except (httpx.TimeoutException, httpx.ConnectError):
+                        logger.warning("CMS timeout during relaxation, stopping")
                         break
-                try:
-                    response = await client.get(
-                        "/api/v1/products/for-recommendation", params=params,
-                        timeout=req_timeout,
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-                    products = self._extract_products(data)
-                    if products:
-                        return products, "shop"
-                except (httpx.TimeoutException, httpx.ConnectError):
-                    logger.warning("CMS timeout during filter relaxation, stopping retries")
-                    break
 
             if not products:
-                logger.warning("Laravel returned empty products after relaxation, falling back to mocks")
+                logger.warning("CMS returned empty, falling back to mocks")
                 return self._get_mock_products(), "mock"
-            return products, "shop"
+
+            # ── Stage 2: Python-side attribute scoring ──
+            scored = []
+            for p in products:
+                score = score_product_relevance(p, answers)
+                scored.append((score, p))
+
+            # Sort by score descending — best matches first
+            scored.sort(key=lambda x: x[0], reverse=True)
+            sorted_products = [p for _, p in scored]
+
+            # Log scoring summary
+            if scored:
+                top_score = scored[0][0]
+                avg_score = sum(s for s, _ in scored) / len(scored)
+                logger.info(
+                    "Stage 2 — scored %d products: top=%.2f avg=%.2f (returning top %d)",
+                    len(scored), top_score, avg_score, min(len(sorted_products), _RETURN_LIMIT),
+                )
+
+            return sorted_products[:_RETURN_LIMIT], "shop"
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             logger.error(
@@ -282,15 +535,7 @@ class ProductService:
             return self._get_mock_products(), "mock"
 
     async def get_product_by_id(self, product_id: str) -> Optional[dict]:
-        """
-        Get a single product by ID.
-
-        Args:
-            product_id: The product ID
-
-        Returns:
-            Product dictionary or None
-        """
+        """Get a single product by ID."""
         if not self.api_base_url:
             logger.warning("SHOP_API_URL not configured")
             return None
@@ -312,19 +557,7 @@ class ProductService:
         conversation_context: Optional[str] = None,
         limit: int = 5,
     ) -> list[ProductRecommendation]:
-        """
-        Get product recommendations based on user context.
-
-        Args:
-            measurements: User's body measurements
-            preferences: User's preferences
-            conversation_context: Context from the conversation
-            limit: Maximum recommendations to return
-
-        Returns:
-            List of ProductRecommendation objects
-        """
-        # Fetch products (filtered by preferences if available)
+        """Get product recommendations based on user context."""
         filter_params = {}
 
         if preferences:
@@ -337,7 +570,6 @@ class ProductService:
         if not products:
             return []
 
-        # Score and rank products
         scored_products = []
         for product in products:
             score, reasons = self._calculate_match_score(
@@ -345,10 +577,8 @@ class ProductService:
             )
             scored_products.append((product, score, reasons))
 
-        # Sort by score descending
         scored_products.sort(key=lambda x: x[1], reverse=True)
 
-        # Convert to recommendations
         recommendations = []
         for product, score, reasons in scored_products[:limit]:
             recommendations.append(ProductRecommendation(
@@ -371,19 +601,13 @@ class ProductService:
         measurements: Optional[dict],
         preferences: Optional[UserPreferences],
     ) -> tuple[float, list[str]]:
-        """
-        Calculate how well a product matches user criteria.
-
-        Returns:
-            Tuple of (score 0-1, list of match reasons)
-        """
-        score = 0.5  # Base score
+        """Calculate how well a product matches user criteria (chat endpoint)."""
+        score = 0.5
         reasons = []
 
         if not preferences:
             return score, reasons
 
-        # Color matching
         product_colors = product.get("colors", [])
         if preferences.preferred_colors and product_colors:
             matching_colors = set(preferences.preferred_colors) & set(product_colors)
@@ -391,21 +615,18 @@ class ProductService:
                 score += 0.15
                 reasons.append(f"رنگ مورد علاقه: {', '.join(matching_colors)}")
 
-        # Fabric matching
         product_fabric = product.get("fabric", "").lower()
         if preferences.preferred_fabrics and product_fabric:
             if any(f.lower() in product_fabric for f in preferences.preferred_fabrics):
                 score += 0.15
                 reasons.append(f"پارچه مورد علاقه: {product_fabric}")
 
-        # Style matching
         product_style = product.get("style", "").lower()
         if preferences.preferred_styles and product_style:
             if any(s.lower() in product_style for s in preferences.preferred_styles):
                 score += 0.1
                 reasons.append(f"سبک مورد علاقه: {product_style}")
 
-        # Budget matching
         product_price = float(product.get("price", 0))
         if preferences.budget_range:
             min_budget, max_budget = preferences.budget_range
@@ -413,22 +634,11 @@ class ProductService:
                 score += 0.1
                 reasons.append("در محدوده بودجه")
 
-        # Size matching based on measurements
-        if measurements:
-            # This would need product size data to work properly
-            # For now, we'll add a placeholder
-            pass
-
-        # Normalize score to 0-1
         score = min(1.0, max(0.0, score))
-
         return score, reasons
 
     def _get_mock_products(self) -> list[dict]:
-        """
-        Return mock products for development/testing.
-        Remove this when the real API is connected.
-        """
+        """Return mock products for development/testing."""
         return [
             {
                 "id": "1",

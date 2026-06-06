@@ -565,6 +565,7 @@ def _process_upload_pare_impl(
                                 user_height_cm=user_height_cm,
                                 gender=gender,
                                 width_scale=width_scale,
+                                bmi=bmi,
                             )
                             per_view_results.append(res)
                             results["measurements"].append({
@@ -600,6 +601,7 @@ def _process_upload_pare_impl(
                             user_height_cm=user_height_cm,
                             gender=gender,
                             width_scale=width_scale,
+                            bmi=bmi,
                         )
                         logger.info(
                             f"Consensus mesh measurement OK for {upload_id}"
@@ -670,7 +672,7 @@ def _process_upload_pare_impl(
                     # ── Calibration offsets ──
                     try:
                         from measure.calibration import apply_calibration
-                        apply_calibration(avg_res, body_model=body_model)
+                        apply_calibration(avg_res, gender=gender, body_model=body_model)
                     except Exception as e:
                         logger.warning(f"Calibration failed: {e}")
 

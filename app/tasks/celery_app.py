@@ -43,4 +43,8 @@ if settings.celery_enabled:
             "schedule": 60 * 60 * 24 * 7,  # Weekly
             "args": (7,),  # Delete files older than 7 days
         },
+        "recalibrate-weekly": {
+            "task": "app.tasks.cleanup.run_recalibration",
+            "schedule": 60 * 60 * 24 * 7,  # Weekly
+        },
     }

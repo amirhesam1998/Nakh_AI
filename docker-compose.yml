@@ -34,6 +34,23 @@ services:
     ports:
       - "8000:80"
 
+  # Meilisearch — attribute-based product search
+  meilisearch:
+    image: getmeili/meilisearch:v1.7
+    container_name: nakh-meilisearch
+    restart: unless-stopped
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_MASTER_KEY: '${MEILISEARCH_KEY:-change-me-in-production}'
+    volumes:
+      - meilisearch_data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
   # FastAPI Application
   api:
     build:
@@ -50,6 +67,10 @@ services:
       # Reach the CMS by docker service name, not 127.0.0.1.
       - SHOP_API_URL=http://nakh-cms
       - ECOMMERCE_AUTH_URL=http://nakh-cms/api/v1/user
+      - MEILISEARCH_URL=http://meilisearch:7700
+      - MEILISEARCH_KEY=${MEILISEARCH_KEY:-change-me-in-production}
+      - INTERNAL_API_URL=http://nakh-cms
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-}
       - SERVER_PORT=8000
     volumes:
       - media_data:/app/media
@@ -61,6 +82,8 @@ services:
         condition: service_healthy
       nakh-cms:
         condition: service_started
+      meilisearch:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s
@@ -117,3 +140,4 @@ volumes:
   redis_data:
   media_data:
   logs_data:
+  meilisearch_data:

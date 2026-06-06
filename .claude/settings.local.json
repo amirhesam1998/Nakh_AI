@@ -34,7 +34,8 @@
       "Bash(cd:*)",
       "Bash(I don’t want to run it with Docker for now.\rForget Docker for the moment.\r\rI want each service to run separately on its own without Docker, and then communicate with each other normally.)",
       "Bash(find:*)",
-      "Bash(mysql:*)"
+      "Bash(mysql:*)",
+      "Bash(pip install:*)"
     ]
   }
 }
