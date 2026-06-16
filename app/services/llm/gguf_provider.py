@@ -122,6 +122,7 @@ class GGUFProvider(BaseLLMProvider):
         top_k: int = 50,
         repetition_penalty: float = 1.1,
         stop_sequences: Optional[list[str]] = None,
+        system_prompt: Optional[str] = None,  # accepted for API parity; unused
     ) -> LLMResponse:
         """Generate text from the GGUF model."""
         if not self._is_loaded:

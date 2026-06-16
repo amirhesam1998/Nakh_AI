@@ -77,6 +77,23 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Error shutting down LLM: {e}")
 
+    # Close event forwarder + embedding clients
+    try:
+        from app.services import events
+        await events.close()
+    except Exception as e:
+        logger.debug(f"Error closing events forwarder: {e}")
+    try:
+        from app.services.embedding import embedding_service
+        await embedding_service.close()
+    except Exception as e:
+        logger.debug(f"Error closing embedding client: {e}")
+    try:
+        from app.services.product_service import product_service
+        await product_service.close()
+    except Exception as e:
+        logger.debug(f"Error closing product service: {e}")
+
     try:
         await close_redis()
     except Exception as e:

@@ -5,17 +5,40 @@ Uses /api/chat (chat completion with roles) instead of /api/generate
 because instruct-tuned models perform significantly better when given
 system + user message roles rather than a raw prompt string.
 """
+import json
 import logging
-from typing import Optional
+from typing import Iterator, Optional
 
 import httpx
 
+from app.config import settings
 from .base import BaseLLMProvider, LLMResponse
 
 logger = logging.getLogger(__name__)
 
 # Generous timeout: CPU inference on large models can be slow.
 _TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
+
+
+def _split_prompt(prompt: str) -> tuple[str, str]:
+    """Heuristically split a raw prompt into (system, user).
+
+    Convention: everything before the first '\\n---' line is the system
+    message. Kept for backward compatibility when no explicit system_prompt is
+    passed.
+    """
+    system_msg = ""
+    user_msg = prompt
+    separator_idx = prompt.find("\n---")
+    if separator_idx > 0:
+        system_msg = prompt[:separator_idx].strip()
+        user_msg = prompt[separator_idx:].strip()
+    elif "\n\n" in prompt:
+        first_break = prompt.index("\n\n")
+        if first_break < 500:
+            system_msg = prompt[:first_break].strip()
+            user_msg = prompt[first_break:].strip()
+    return system_msg, user_msg
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -78,42 +101,33 @@ class OllamaProvider(BaseLLMProvider):
     # ------------------------------------------------------------------
     # Generation
     # ------------------------------------------------------------------
-    def generate(
+    @property
+    def supports_streaming(self) -> bool:
+        return True
+
+    def _build_payload(
         self,
         prompt: str,
-        max_new_tokens: int = 512,
-        temperature: float = 0.7,
-        top_p: float = 0.9,
-        top_k: int = 50,
-        repetition_penalty: float = 1.1,
-        stop_sequences: Optional[list[str]] = None,
-    ) -> LLMResponse:
-        """Generate text using Ollama's /api/chat endpoint.
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        repetition_penalty: float,
+        stop_sequences: Optional[list[str]],
+        system_prompt: Optional[str],
+        stream: bool,
+    ) -> dict:
+        """Build the /api/chat payload.
 
-        The prompt is split into a system message (first paragraph) and a
-        user message (the rest) to leverage the chat template of instruct
-        models.  If the prompt doesn't naturally split, it's sent entirely
-        as the user message.
+        When an explicit ``system_prompt`` is supplied it is used verbatim and
+        the entire ``prompt`` becomes the user message. A stable system message
+        across calls lets Ollama reuse the cached prompt prefix (KV cache),
+        cutting latency on the large, unchanging stylist/fabric knowledge block.
         """
-        if not self._client:
-            raise RuntimeError("OllamaProvider not loaded. Call load_model() first.")
-
-        # Split prompt into system + user for better instruction following.
-        # Convention: everything before the first "---" line is the system
-        # message; everything after is the user message.
-        system_msg = ""
-        user_msg = prompt
-        separator_idx = prompt.find("\n---")
-        if separator_idx > 0:
-            system_msg = prompt[:separator_idx].strip()
-            user_msg = prompt[separator_idx:].strip()
-        # If no separator, try first paragraph as system
-        elif "\n\n" in prompt:
-            first_break = prompt.index("\n\n")
-            # Only use first paragraph as system if it's reasonably short
-            if first_break < 500:
-                system_msg = prompt[:first_break].strip()
-                user_msg = prompt[first_break:].strip()
+        if system_prompt is not None:
+            system_msg, user_msg = system_prompt, prompt
+        else:
+            system_msg, user_msg = _split_prompt(prompt)
 
         messages = []
         if system_msg:
@@ -123,7 +137,8 @@ class OllamaProvider(BaseLLMProvider):
         payload: dict = {
             "model": self.model_path,
             "messages": messages,
-            "stream": False,
+            "stream": stream,
+            "keep_alive": getattr(settings, "llm_keep_alive", "30m"),
             "options": {
                 "num_predict": max_new_tokens,
                 "temperature": temperature,
@@ -134,6 +149,27 @@ class OllamaProvider(BaseLLMProvider):
         }
         if stop_sequences:
             payload["options"]["stop"] = stop_sequences
+        return payload
+
+    def generate(
+        self,
+        prompt: str,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        top_k: int = 50,
+        repetition_penalty: float = 1.1,
+        stop_sequences: Optional[list[str]] = None,
+        system_prompt: Optional[str] = None,
+    ) -> LLMResponse:
+        """Generate text using Ollama's /api/chat endpoint."""
+        if not self._client:
+            raise RuntimeError("OllamaProvider not loaded. Call load_model() first.")
+
+        payload = self._build_payload(
+            prompt, max_new_tokens, temperature, top_p, top_k,
+            repetition_penalty, stop_sequences, system_prompt, stream=False,
+        )
 
         try:
             resp = self._client.post("/api/chat", json=payload)
@@ -159,3 +195,47 @@ class OllamaProvider(BaseLLMProvider):
                 finish_reason="error",
                 model_name=self.model_path,
             )
+
+    def generate_stream(
+        self,
+        prompt: str,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+        stop_sequences: Optional[list[str]] = None,
+        system_prompt: Optional[str] = None,
+        top_p: float = 0.9,
+        top_k: int = 50,
+        repetition_penalty: float = 1.1,
+        **kwargs,
+    ) -> Iterator[str]:
+        """Yield content deltas from Ollama's streaming /api/chat endpoint.
+
+        This is a *synchronous* generator (Ollama client is sync httpx). The API
+        layer adapts it to an async SSE stream via a threadpool iterator.
+        """
+        if not self._client:
+            raise RuntimeError("OllamaProvider not loaded. Call load_model() first.")
+
+        payload = self._build_payload(
+            prompt, max_new_tokens, temperature, top_p, top_k,
+            repetition_penalty, stop_sequences, system_prompt, stream=True,
+        )
+
+        try:
+            with self._client.stream("POST", "/api/chat", json=payload) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except (ValueError, TypeError):
+                        continue
+                    delta = (chunk.get("message") or {}).get("content", "")
+                    if delta:
+                        yield delta
+                    if chunk.get("done"):
+                        break
+        except httpx.HTTPError as exc:
+            logger.error("Ollama streaming generation failed: %s", exc)
+            return

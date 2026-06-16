@@ -121,6 +121,7 @@ class LLMManager:
         prompt: str,
         max_new_tokens: int = 512,
         temperature: float = 0.7,
+        system_prompt: Optional[str] = None,
         **kwargs
     ) -> LLMResponse:
         """
@@ -130,6 +131,7 @@ class LLMManager:
             prompt: The input prompt
             max_new_tokens: Maximum tokens to generate
             temperature: Sampling temperature
+            system_prompt: Explicit, stable system message (enables prompt caching)
             **kwargs: Additional generation parameters
 
         Returns:
@@ -144,7 +146,57 @@ class LLMManager:
             prompt=prompt,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
+            system_prompt=system_prompt,
             **kwargs
+        )
+
+    @property
+    def supports_streaming(self) -> bool:
+        return bool(self._provider) and self._provider.supports_streaming
+
+    def generate_stream(
+        self,
+        prompt: str,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+        system_prompt: Optional[str] = None,
+        **kwargs,
+    ):
+        """Yield text deltas from the active provider (sync generator)."""
+        if not self.is_ready:
+            raise RuntimeError(
+                "LLM not initialized. Call initialize() first or check LLM_MODEL_PATH."
+            )
+        yield from self._provider.generate_stream(
+            prompt=prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            system_prompt=system_prompt,
+            **kwargs,
+        )
+
+    def chat_stream(
+        self,
+        messages: list[dict],
+        system_prompt: Optional[str] = None,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+        **kwargs,
+    ):
+        """Stream a chat response (sync generator of text deltas)."""
+        if not self.is_ready:
+            raise RuntimeError(
+                "LLM not initialized. Call initialize() first or check LLM_MODEL_PATH."
+            )
+        sys_prompt = system_prompt or self._system_prompt
+        prompt = self._provider.format_chat_prompt(messages, sys_prompt)
+        yield from self._provider.generate_stream(
+            prompt=prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            system_prompt=sys_prompt,
+            stop_sequences=["کاربر:", "User:", "\n\n\n"],
+            **kwargs,
         )
 
     def chat(

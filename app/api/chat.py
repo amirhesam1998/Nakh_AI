@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from app.config import settings
 from app.core.dependencies import get_current_active_user
@@ -123,6 +124,45 @@ async def send_message(
     )
 
 
+@router.post("/message/stream")
+async def stream_message(
+    request: ChatMessageRequest,
+    current_user: dict = Depends(get_current_active_user),
+):
+    """Stream a chatbot reply via Server-Sent Events (live typing UX).
+
+    Emits `event: meta` (session id) once, then `event: token` deltas, then
+    `event: done`.
+    """
+    measurements = _get_user_measurements(current_user["id"])
+    preferences = await chat_service.get_user_preferences(current_user["id"])
+
+    async def event_gen():
+        try:
+            agen = chat_service.stream_message(
+                user_id=current_user["id"],
+                message=request.message,
+                session_id=request.session_id,
+                measurements=measurements,
+                preferences=preferences,
+            )
+            async for item in agen:
+                if isinstance(item, dict):  # leading session marker
+                    yield f"event: meta\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
+                else:
+                    yield f"event: token\ndata: {json.dumps({'text': item}, ensure_ascii=False)}\n\n"
+            yield "event: done\ndata: {}\n\n"
+        except Exception as e:
+            logger.error("Chat stream error: %s", e)
+            yield f"event: error\ndata: {json.dumps({'message': 'stream_failed'})}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/history/{session_id}", response_model=ChatHistoryResponse)
 async def get_chat_history(
     session_id: str,
@@ -212,25 +252,15 @@ async def delete_preferences(
 
 def _get_user_measurements(user_id: str) -> Optional[dict]:
     """
-    Get user's latest measurements by scanning metadata JSON files on disk.
+    Get user's latest measurements via the indexed upload store (no full scan).
     """
-    if not METADATA_DIR.exists():
-        return None
+    from app.services import upload_store
 
-    # Collect user's completed uploads, sorted newest-first
-    candidates = []
-    for path in METADATA_DIR.glob("*.json"):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if str(data.get("user_id")) != str(user_id):
-            continue
-        if data.get("processing_status") != "completed" and not data.get("is_processed"):
-            continue
-        candidates.append(data)
-
-    candidates.sort(key=lambda d: d.get("uploaded_at", ""), reverse=True)
+    # Newest-first, completed uploads only.
+    candidates = [
+        u for u in upload_store.list_user_metadata(user_id)
+        if u.get("processing_status") == "completed" or u.get("is_processed")
+    ]
 
     for upload in candidates:
         results = upload.get("processing_results") or {}

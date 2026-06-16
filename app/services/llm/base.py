@@ -3,7 +3,7 @@ Base classes for LLM providers.
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterator, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,7 @@ class BaseLLMProvider(ABC):
         top_k: int = 50,
         repetition_penalty: float = 1.1,
         stop_sequences: Optional[list[str]] = None,
+        system_prompt: Optional[str] = None,
     ) -> LLMResponse:
         """
         Generate a response from the model.
@@ -71,11 +72,43 @@ class BaseLLMProvider(ABC):
             top_k: Top-k sampling parameter
             repetition_penalty: Penalty for repeating tokens
             stop_sequences: Sequences that stop generation
+            system_prompt: Explicit system message. When provided, providers
+                should use it verbatim (stable across calls → cacheable) instead
+                of heuristically splitting the prompt.
 
         Returns:
             LLMResponse with generated text
         """
         pass
+
+    def generate_stream(
+        self,
+        prompt: str,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+        stop_sequences: Optional[list[str]] = None,
+        system_prompt: Optional[str] = None,
+        **kwargs,
+    ) -> Iterator[str]:
+        """Yield text deltas as they are generated.
+
+        Default implementation falls back to a single non-streamed chunk so
+        providers that don't support streaming still work behind the streaming
+        API. Override for true token streaming.
+        """
+        resp = self.generate(
+            prompt=prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            stop_sequences=stop_sequences,
+            system_prompt=system_prompt,
+        )
+        if resp.text:
+            yield resp.text
+
+    @property
+    def supports_streaming(self) -> bool:
+        return False
 
     def format_chat_prompt(
         self,

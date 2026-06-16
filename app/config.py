@@ -3,10 +3,16 @@ Application configuration using Pydantic Settings.
 
 All configuration is loaded from environment variables.
 """
+import logging
 from pathlib import Path
 from typing import List
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_SECRET_KEY = "change-me-in-production"
 
 
 class Settings(BaseSettings):
@@ -93,6 +99,41 @@ class Settings(BaseSettings):
     shop_api_url: str = ""
     shop_api_key: str = ""
 
+    # When False (production default), the recommendation pipeline NEVER returns
+    # fabricated mock products to a real user — it surfaces an "unavailable"
+    # state instead.  Set True only for local development / tests.
+    allow_mock_products: bool = False
+
+    # ── LLM concurrency / caching ──
+    # Max number of concurrent LLM generations (protects the event loop thread
+    # pool and the Ollama server from overload under traffic spikes).
+    llm_max_concurrency: int = 2
+    # How long Ollama keeps the model warm in memory between calls. A stable
+    # system prompt + warm model lets Ollama reuse the cached prompt prefix.
+    llm_keep_alive: str = "30m"
+
+    # ── PARE processing queue ──
+    # Number of worker threads dedicated to (GPU-heavy) PARE processing.
+    # Keep at 1 unless you have multiple GPUs / plenty of VRAM.
+    pare_max_workers: int = 1
+    # Reject new processing jobs when this many are already queued/running.
+    pare_max_queue_depth: int = 20
+
+    # ── Semantic recommendation scoring (optional) ──
+    # When True, candidate products are re-ranked using vector similarity
+    # between the user's preference text and each product (via Ollama
+    # embeddings). Falls back to token scoring if the embedder is unreachable.
+    embedding_enabled: bool = False
+    embedding_model: str = "nomic-embed-text"
+    # Blend weight: final = (1-w)*token_score + w*semantic_score
+    embedding_blend_weight: float = 0.4
+
+    # ── Observability ──
+    metrics_enabled: bool = True
+    # Append-only behavioural event log (recommendation impressions, clicks,
+    # purchases, fit feedback). Seeds the future ranking / accuracy models.
+    event_log_enabled: bool = True
+
     # E-commerce auth proxy (validate Sanctum tokens against the Laravel CMS).
     # Leave empty to disable the auth proxy and treat tokens as opaque session IDs.
     # In Docker, set ECOMMERCE_AUTH_URL to the Laravel service name.
@@ -115,6 +156,28 @@ class Settings(BaseSettings):
     # Server bind (used when running `python -m app.main` directly)
     server_host: str = "0.0.0.0"
     server_port: int = 8000
+
+    @model_validator(mode="after")
+    def _validate_production_safety(self) -> "Settings":
+        """Fail fast on insecure production configuration.
+
+        When ``debug`` is False the app is assumed to be running in a
+        production-like environment, where shipping the placeholder secret key
+        is a real security hole. We refuse to start rather than silently sign
+        tokens with a publicly-known key.
+        """
+        if not self.debug and self.secret_key == _DEFAULT_SECRET_KEY:
+            raise ValueError(
+                "SECRET_KEY is still the default placeholder while DEBUG=false. "
+                "Set a strong, unique SECRET_KEY in the environment before "
+                "running in production."
+            )
+        if self.debug and self.secret_key == _DEFAULT_SECRET_KEY:
+            logger.warning(
+                "Using the default SECRET_KEY — fine for local dev, but MUST be "
+                "overridden in production (set DEBUG=false to enforce)."
+            )
+        return self
 
 
 # Create global settings instance

@@ -35,7 +35,13 @@
       "Bash(I don’t want to run it with Docker for now.\rForget Docker for the moment.\r\rI want each service to run separately on its own without Docker, and then communicate with each other normally.)",
       "Bash(find:*)",
       "Bash(mysql:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(python -m py_compile app/config.py app/main.py app/api/uploads.py app/api/recommendations.py app/api/chat.py app/api/health.py app/services/product_service.py app/services/size_calculator.py app/services/embedding.py app/services/events.py app/services/metrics.py app/services/concurrency.py app/services/upload_store.py app/services/chat_service.py app/services/llm/base.py app/services/llm/manager.py app/services/llm/ollama_provider.py app/services/llm/transformers_provider.py app/services/llm/gguf_provider.py app/tasks/processing.py)",
+      "Bash(python -m pytest -q)",
+      "Bash(git check-ignore *)",
+      "Bash(python -m py_compile app/api/recommendations.py app/api/uploads.py app/api/chat.py app/services/chat_service.py)",
+      "Bash(php -l Nakh_CMS/app/Http/Controllers/Api/Internal/EventController.php)",
+      "Bash(php -l Nakh_CMS/app/Http/Resources/Api/V1/Product/RecommendationProductResource.php)"
     ]
   }
 }

@@ -19,6 +19,73 @@ from app.schemas.chat import ProductRecommendation, UserPreferences
 
 logger = logging.getLogger(__name__)
 
+# ── Persian/Arabic text normalisation ──
+# Different keyboards/CMS exports mix Arabic and Persian forms of the same
+# letters (ي/ی, ك/ک), use various spaces (ZWNJ), and Arabic/Persian digits.
+# Without normalising, "آبي" and "آبی" are treated as different tokens.
+_CHAR_MAP = str.maketrans({
+    "ي": "ی", "ك": "ک", "ﻙ": "ک", "ﻩ": "ه", "ة": "ه", "أ": "ا",
+    "إ": "ا", "آ": "ا", "ؤ": "و", "ئ": "ی", "ٔ": "",
+    "‌": " ",  # ZWNJ → space
+    "ي": "ی", "ك": "ک",
+    "۰": "0", "۱": "1", "۲": "2", "۳": "3", "۴": "4",
+    "۵": "5", "۶": "6", "۷": "7", "۸": "8", "۹": "9",
+})
+
+
+def _normalize_fa(text: str) -> str:
+    """Normalise Persian/Arabic text so equivalent forms compare equal."""
+    return str(text).translate(_CHAR_MAP).strip().lower()
+
+
+# ── Domain synonym groups ──
+# Each set lists terms that should be treated as semantically equivalent for
+# matching. This is the cheap, always-on complement to optional embeddings:
+# it captures the most common fashion equivalences deterministically.
+_SYNONYM_GROUPS: list[set[str]] = [
+    # colours
+    {"ابی", "اسمانی", "نیلی", "فیروزه ای"},
+    {"سرمه ای", "ابی تیره", "نیوی", "navy"},
+    {"مشکی", "سیاه", "زغالی", "black"},
+    {"سفید", "شیری", "نقره ای", "white"},
+    {"قرمز", "اناری", "بردو", "زرشکی", "red"},
+    {"سبز", "زیتونی", "یشمی", "green"},
+    {"قهوه ای", "خاکی", "کرم", "بژ", "brown", "beige"},
+    {"خاکستری", "طوسی", "gray", "grey"},
+    # occasions
+    {"رسمی", "اداری", "کاری", "formal", "office"},
+    {"مجلسی", "مهمانی", "عروسی", "شب", "party"},
+    {"کژوال", "کجوال", "روزمره", "اسپرت", "casual", "راحتی"},
+    {"ورزشی", "اسپرت", "sport"},
+    # seasons
+    {"تابستان", "تابستانه", "گرم", "summer"},
+    {"زمستان", "زمستانه", "سرد", "winter"},
+    {"بهار", "بهاره", "spring"},
+    {"پاییز", "پاییزه", "autumn", "fall"},
+    # materials
+    {"پنبه", "نخی", "cotton"},
+    {"پشم", "پشمی", "wool"},
+    {"کتان", "لینن", "linen"},
+    {"ابریشم", "حریر", "silk"},
+    {"جین", "denim"},
+]
+
+# Build term → canonical-group-id lookup once.
+_SYN_LOOKUP: dict[str, int] = {}
+for _gid, _grp in enumerate(_SYNONYM_GROUPS):
+    for _term in _grp:
+        _SYN_LOOKUP[_normalize_fa(_term)] = _gid
+
+
+def _expand_tokens(tokens: set[str]) -> set[str]:
+    """Expand a token set with synonym-group ids so equivalent terms match."""
+    expanded = set(tokens)
+    for t in tokens:
+        gid = _SYN_LOOKUP.get(t)
+        if gid is not None:
+            expanded.add(f"__syn{gid}")
+    return expanded
+
 # ── Stage 2: attribute key mapping ──
 # Maps questionnaire answer keys → possible CMS variant attribute names (Persian + English).
 _ATTR_KEY_MAP: dict[str, list[str]] = {
@@ -55,13 +122,13 @@ _RETURN_LIMIT = 20
 def _tokenise(text: str) -> set[str]:
     """Split a Persian/English string on commas (both ، and ,) and whitespace.
 
-    Returns a set of stripped, non-empty lowercase tokens.
+    Returns a set of normalised, non-empty tokens (Arabic/Persian forms unified).
     """
     # Replace Persian comma with standard comma, then split
     parts = re.split(r"[,،]", str(text))
     tokens: set[str] = set()
     for part in parts:
-        t = part.strip().lower()
+        t = _normalize_fa(part)
         if t and t != "-":
             tokens.add(t)
     return tokens
@@ -138,20 +205,115 @@ def score_product_relevance(product: dict, answers: dict) -> float:
 
         total_weight += weight
 
-        # Check overlap: any user token is a substring of a product token or vice-versa
-        hit = False
-        for ut in user_tokens:
-            for pt in product_tokens:
-                if ut in pt or pt in ut:
-                    hit = True
+        # Expand both sides with synonym-group markers so equivalent terms
+        # (e.g. سرمه‌ای ≈ آبی تیره, رسمی ≈ اداری) count as matches.
+        user_exp = _expand_tokens(user_tokens)
+        prod_exp = _expand_tokens(product_tokens)
+
+        # Check overlap: exact/synonym token match, OR substring containment.
+        hit = bool(user_exp & prod_exp)
+        if not hit:
+            for ut in user_tokens:
+                for pt in product_tokens:
+                    if ut in pt or pt in ut:
+                        hit = True
+                        break
+                if hit:
                     break
-            if hit:
-                break
 
         if hit:
             matched_weight += weight
 
     return matched_weight / total_weight if total_weight > 0 else 0.0
+
+
+def _product_text(product: dict) -> str:
+    """Flatten a product into a short text blob for embedding."""
+    parts: list[str] = []
+    for key in ("title", "name_fa", "name", "category", "brand"):
+        v = product.get(key)
+        if v:
+            parts.append(str(v))
+    specs = product.get("specifications") or {}
+    for k, v in specs.items():
+        parts.append(f"{k} {v}")
+    attrs = _extract_product_attrs(product)
+    for vals in attrs.values():
+        parts.extend(vals)
+    return " ".join(parts)[:512]
+
+
+def _query_text(answers: dict) -> str:
+    """Build a natural-language preference blob from questionnaire answers."""
+    parts: list[str] = []
+    interesting = ("style", "occasion", "season", "colors", "material",
+                   "pattern", "usage", "weave")
+    for key in interesting:
+        v = answers.get(key)
+        if not v:
+            continue
+        if isinstance(v, list):
+            parts.extend(str(x) for x in v if x)
+        else:
+            parts.append(str(v))
+    # Per-type answers (multi-product mode)
+    for pa in (answers.get("productAnswers") or {}).values():
+        for key in interesting:
+            v = pa.get(key)
+            if isinstance(v, list):
+                parts.extend(str(x) for x in v if x)
+            elif v:
+                parts.append(str(v))
+    return " ".join(parts)[:512]
+
+
+async def rerank_with_embeddings(
+    answers: dict,
+    scored_products: list[tuple[float, dict]],
+    blend_weight: Optional[float] = None,
+) -> list[dict]:
+    """Blend token relevance with semantic similarity, return products sorted desc.
+
+    ``scored_products`` is a list of (token_score, product). When embeddings are
+    disabled/unreachable, this is a no-op that returns the products already
+    ordered by token score. Otherwise:
+        final = (1 - w) * token_score + w * cosine(query, product)
+    """
+    from app.services.embedding import embedding_service, cosine
+
+    if not scored_products:
+        return []
+
+    if not embedding_service.enabled:
+        return [p for _, p in scored_products]
+
+    w = blend_weight if blend_weight is not None else getattr(
+        settings, "embedding_blend_weight", 0.4
+    )
+
+    query = _query_text(answers)
+    if not query:
+        return [p for _, p in scored_products]
+
+    products = [p for _, p in scored_products]
+    texts = [query] + [_product_text(p) for p in products]
+    vectors = await embedding_service.embed(texts)
+    query_vec = vectors[0]
+    if query_vec is None:
+        # Embedder failed — keep token ordering.
+        return products
+
+    blended: list[tuple[float, dict]] = []
+    for (token_score, product), pvec in zip(scored_products, vectors[1:]):
+        sem = cosine(query_vec, pvec)
+        final = (1.0 - w) * token_score + w * sem
+        blended.append((final, product))
+    blended.sort(key=lambda x: x[0], reverse=True)
+    logger.info(
+        "Semantic rerank: %d products, blend_w=%.2f, top=%.2f",
+        len(blended), w, blended[0][0] if blended else 0.0,
+    )
+    return [p for _, p in blended]
 
 
 class ProductService:
@@ -248,6 +410,22 @@ class ProductService:
         """Whether Meilisearch is configured."""
         return bool(self._meili_url)
 
+    def _fallback(self) -> tuple[list[dict], str]:
+        """Return the catalogue-unavailable fallback.
+
+        In production (``allow_mock_products`` False) we MUST NOT show fabricated
+        products at made-up prices to a real shopper — we return an empty list
+        with source 'unavailable' so the caller can render a clear
+        "catalogue temporarily unavailable" state. Mock data is dev/test only.
+        """
+        if getattr(settings, "allow_mock_products", False):
+            return self._get_mock_products(), "mock"
+        logger.error(
+            "Product catalogue unavailable and mock products are disabled "
+            "(allow_mock_products=False) — returning empty result."
+        )
+        return [], "unavailable"
+
     async def search_meilisearch(
         self,
         answers: dict,
@@ -339,8 +517,8 @@ class ProductService:
     ) -> list[dict]:
         """Fetch products from the PHP shop API."""
         if not self.api_base_url:
-            logger.warning("SHOP_API_URL not configured, returning mock data")
-            return self._get_mock_products()
+            logger.warning("SHOP_API_URL not configured")
+            return self._get_mock_products() if getattr(settings, "allow_mock_products", False) else []
 
         try:
             client = await self._get_client()
@@ -398,8 +576,8 @@ class ProductService:
         Returns (products, source) where source is "shop" or "mock".
         """
         if not self.api_base_url and not self.meilisearch_enabled:
-            logger.warning("Neither SHOP_API_URL nor MEILISEARCH_URL configured, returning mock data")
-            return self._get_mock_products(), "mock"
+            logger.warning("Neither SHOP_API_URL nor MEILISEARCH_URL configured")
+            return self._fallback()
 
         try:
             # ── Stage 1a: Try Meilisearch first (if configured) ──
@@ -409,20 +587,21 @@ class ProductService:
                     # Meilisearch already filters by attributes — still run Python scoring
                     scored = [(score_product_relevance(p, answers), p) for p in meili_results]
                     scored.sort(key=lambda x: x[0], reverse=True)
-                    sorted_products = [p for _, p in scored]
                     if scored:
                         logger.info(
                             "Meilisearch+scoring: %d products, top=%.2f avg=%.2f",
                             len(scored), scored[0][0],
                             sum(s for s, _ in scored) / len(scored),
                         )
+                    # Stage 2.5 — optional semantic rerank (no-op if disabled)
+                    sorted_products = await rerank_with_embeddings(answers, scored)
                     return sorted_products[:_RETURN_LIMIT], "shop"
                 # Meilisearch returned empty or failed — fall through to CMS
                 logger.info("Meilisearch returned no results, falling back to CMS")
 
             if not self.api_base_url:
-                logger.warning("SHOP_API_URL not configured, returning mock data")
-                return self._get_mock_products(), "mock"
+                logger.warning("SHOP_API_URL not configured")
+                return self._fallback()
 
             client = await self._get_client()
 
@@ -490,8 +669,8 @@ class ProductService:
                         break
 
             if not products:
-                logger.warning("CMS returned empty, falling back to mocks")
-                return self._get_mock_products(), "mock"
+                logger.warning("CMS returned empty after relaxation")
+                return self._fallback()
 
             # ── Stage 2: Python-side attribute scoring ──
             scored = []
@@ -501,7 +680,6 @@ class ProductService:
 
             # Sort by score descending — best matches first
             scored.sort(key=lambda x: x[0], reverse=True)
-            sorted_products = [p for _, p in scored]
 
             # Log scoring summary
             if scored:
@@ -509,9 +687,11 @@ class ProductService:
                 avg_score = sum(s for s, _ in scored) / len(scored)
                 logger.info(
                     "Stage 2 — scored %d products: top=%.2f avg=%.2f (returning top %d)",
-                    len(scored), top_score, avg_score, min(len(sorted_products), _RETURN_LIMIT),
+                    len(scored), top_score, avg_score, min(len(scored), _RETURN_LIMIT),
                 )
 
+            # Stage 2.5 — optional semantic rerank (no-op if disabled)
+            sorted_products = await rerank_with_embeddings(answers, scored)
             return sorted_products[:_RETURN_LIMIT], "shop"
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
@@ -523,16 +703,16 @@ class ProductService:
             )
             if isinstance(e, httpx.ConnectError):
                 logger.error("Is the CMS running at %s?", self.api_base_url)
-            return self._get_mock_products(), "mock"
+            return self._fallback()
         except httpx.HTTPError as e:
             logger.error(
                 "CMS HTTP error [%s]: %s (url=%s)",
                 type(e).__name__, e, self.api_base_url,
             )
-            return self._get_mock_products(), "mock"
+            return self._fallback()
         except Exception as e:
             logger.error("Unexpected error fetching recommendation products [%s]: %s", type(e).__name__, e)
-            return self._get_mock_products(), "mock"
+            return self._fallback()
 
     async def get_product_by_id(self, product_id: str) -> Optional[dict]:
         """Get a single product by ID."""
@@ -550,6 +730,28 @@ class ProductService:
             logger.error(f"Error fetching product {product_id}: {e}")
             return None
 
+    @staticmethod
+    def _preferences_to_answers(preferences: Optional[UserPreferences]) -> dict:
+        """Adapt chat `UserPreferences` into the questionnaire `answers` shape.
+
+        This lets the chat recommendation path reuse the SAME relevance scorer
+        (`score_product_relevance`) as the questionnaire path, instead of a
+        second, divergent heuristic.
+        """
+        answers: dict = {}
+        if not preferences:
+            return answers
+        if getattr(preferences, "preferred_colors", None):
+            answers["colors"] = list(preferences.preferred_colors)
+        if getattr(preferences, "preferred_fabrics", None):
+            answers["material"] = list(preferences.preferred_fabrics)
+        if getattr(preferences, "preferred_styles", None):
+            answers["style"] = list(preferences.preferred_styles)
+        if getattr(preferences, "budget_range", None):
+            answers["minPrice"] = preferences.budget_range[0]
+            answers["maxPrice"] = preferences.budget_range[1]
+        return answers
+
     async def get_recommendations(
         self,
         measurements: Optional[dict] = None,
@@ -557,85 +759,66 @@ class ProductService:
         conversation_context: Optional[str] = None,
         limit: int = 5,
     ) -> list[ProductRecommendation]:
-        """Get product recommendations based on user context."""
-        filter_params = {}
+        """Get product recommendations based on user context (chat path).
 
-        if preferences:
-            if preferences.budget_range:
-                filter_params["min_price"] = preferences.budget_range[0]
-                filter_params["max_price"] = preferences.budget_range[1]
+        Unified with the questionnaire path: products are fetched then ranked
+        with the shared `score_product_relevance` scorer (synonym-aware) and,
+        when enabled, the same semantic rerank.
+        """
+        answers = self._preferences_to_answers(preferences)
+
+        filter_params = {}
+        if preferences and preferences.budget_range:
+            filter_params["min_price"] = preferences.budget_range[0]
+            filter_params["max_price"] = preferences.budget_range[1]
 
         products = await self.fetch_products(limit=50, **filter_params)
-
         if not products:
             return []
 
-        scored_products = []
-        for product in products:
-            score, reasons = self._calculate_match_score(
-                product, measurements, preferences
-            )
-            scored_products.append((product, score, reasons))
+        scored = [(score_product_relevance(p, answers), p) for p in products]
+        scored.sort(key=lambda x: x[0], reverse=True)
+        ranked = await rerank_with_embeddings(answers, scored)
 
-        scored_products.sort(key=lambda x: x[1], reverse=True)
+        # Recover a score per product for the response (semantic rerank reorders
+        # but we keep the token score as the displayed match strength).
+        score_by_id = {id(p): s for s, p in scored}
 
         recommendations = []
-        for product, score, reasons in scored_products[:limit]:
+        for product in ranked[:limit]:
+            score = score_by_id.get(id(product), 0.0)
             recommendations.append(ProductRecommendation(
                 product_id=str(product.get("id", "")),
-                name=product.get("name", ""),
-                name_fa=product.get("name_fa"),
+                name=product.get("name", "") or product.get("title", ""),
+                name_fa=product.get("name_fa") or product.get("title"),
                 description=product.get("description"),
-                price=float(product.get("price", 0)),
+                price=float(product.get("price", 0) or 0),
                 category=product.get("category", ""),
-                image_url=product.get("image_url"),
-                match_score=score,
-                match_reasons=reasons,
+                image_url=product.get("image_url") or product.get("image"),
+                match_score=round(float(score), 3),
+                match_reasons=self._match_reasons(product, answers),
             ))
 
         return recommendations
 
-    def _calculate_match_score(
-        self,
-        product: dict,
-        measurements: Optional[dict],
-        preferences: Optional[UserPreferences],
-    ) -> tuple[float, list[str]]:
-        """Calculate how well a product matches user criteria (chat endpoint)."""
-        score = 0.5
-        reasons = []
-
-        if not preferences:
-            return score, reasons
-
-        product_colors = product.get("colors", [])
-        if preferences.preferred_colors and product_colors:
-            matching_colors = set(preferences.preferred_colors) & set(product_colors)
-            if matching_colors:
-                score += 0.15
-                reasons.append(f"رنگ مورد علاقه: {', '.join(matching_colors)}")
-
-        product_fabric = product.get("fabric", "").lower()
-        if preferences.preferred_fabrics and product_fabric:
-            if any(f.lower() in product_fabric for f in preferences.preferred_fabrics):
-                score += 0.15
-                reasons.append(f"پارچه مورد علاقه: {product_fabric}")
-
-        product_style = product.get("style", "").lower()
-        if preferences.preferred_styles and product_style:
-            if any(s.lower() in product_style for s in preferences.preferred_styles):
-                score += 0.1
-                reasons.append(f"سبک مورد علاقه: {product_style}")
-
-        product_price = float(product.get("price", 0))
-        if preferences.budget_range:
-            min_budget, max_budget = preferences.budget_range
-            if min_budget <= product_price <= max_budget:
-                score += 0.1
-                reasons.append("در محدوده بودجه")
-
-        score = min(1.0, max(0.0, score))
-        return score, reasons
+    @staticmethod
+    def _match_reasons(product: dict, answers: dict) -> list[str]:
+        """Human-readable Persian reasons for why a product matched (chat UI)."""
+        reasons: list[str] = []
+        attrs = _extract_product_attrs(product)
+        labels = {
+            "colors": "رنگ", "material": "جنس", "style": "سبک",
+            "occasion": "مناسبت", "season": "فصل",
+        }
+        for key, label in labels.items():
+            user_tokens = _expand_tokens(_normalise_answer(answers.get(key)))
+            if not user_tokens:
+                continue
+            prod_tokens = _expand_tokens(attrs.get(key, set()))
+            if user_tokens & prod_tokens:
+                vals = "، ".join(sorted(attrs.get(key, set()))[:2])
+                reasons.append(f"{label} مناسب: {vals}" if vals else f"{label} مناسب")
+        return reasons
 
     def _get_mock_products(self) -> list[dict]:
         """Return mock products for development/testing."""

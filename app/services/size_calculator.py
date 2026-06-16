@@ -61,20 +61,110 @@ def _pick_chart(gender: str, body_model: str):
     return _MALE_ADULT
 
 
+def _coerce_float(v) -> Optional[float]:
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
+def extract_size_chart(product: dict) -> Optional[list]:
+    """Parse a product's own size chart into the internal chart format.
+
+    Accepts several shapes the CMS may expose (all optional — returns None when
+    no usable chart is present, so callers fall back to the generic chart):
+
+    1. List of rows::
+
+        product["size_chart"] = [
+            {"label": "M", "chest_max": 96, "waist_max": 83, "hip_max": 96},
+            ...
+        ]
+       (``chest``/``waist``/``hip`` accepted as aliases for the ``*_max`` keys;
+        a ``[min, max]`` pair is also accepted and the max is used.)
+
+    2. Dict keyed by label::
+
+        product["size_chart"] = {"M": {"chest": 96, "waist": 83, "hip": 96}, ...}
+
+    The returned format matches the built-in charts:
+        [(label, chest_max, waist_max, hip_max), ...] sorted ascending by chest.
+    """
+    raw = product.get("size_chart") or product.get("sizeChart")
+    if not raw:
+        return None
+
+    rows: list[dict] = []
+    if isinstance(raw, dict):
+        for label, vals in raw.items():
+            if isinstance(vals, dict):
+                rows.append({"label": label, **vals})
+    elif isinstance(raw, list):
+        rows = [r for r in raw if isinstance(r, dict)]
+    else:
+        return None
+
+    def _val(row: dict, *keys) -> Optional[float]:
+        for k in keys:
+            if k in row and row[k] is not None:
+                v = row[k]
+                if isinstance(v, (list, tuple)) and v:
+                    v = v[-1]  # use upper bound of a [min, max] range
+                f = _coerce_float(v)
+                if f is not None:
+                    return f
+        return None
+
+    parsed = []
+    for row in rows:
+        label = row.get("label") or row.get("size") or row.get("name")
+        if not label:
+            continue
+        chest = _val(row, "chest_max", "chest", "bust_max", "bust")
+        waist = _val(row, "waist_max", "waist")
+        hip = _val(row, "hip_max", "hip", "hips")
+        if chest is None and waist is None and hip is None:
+            continue
+        # Fill missing columns with a large sentinel so _match still works.
+        parsed.append((
+            str(label),
+            chest if chest is not None else 9999,
+            waist if waist is not None else 9999,
+            hip if hip is not None else 9999,
+        ))
+
+    if not parsed:
+        return None
+    parsed.sort(key=lambda r: r[1])  # ascending by chest_max
+    return parsed
+
+
 def calculate_size(
     measurements: dict,
     gender: str = "male",
     body_model: str = "adult",
+    size_chart: Optional[list] = None,
 ) -> dict:
     """
     Calculate the user's clothing size from body measurements.
+
+    Args:
+        size_chart: Optional product-specific chart (from ``extract_size_chart``).
+            When provided it OVERRIDES the generic gender/body-model chart so the
+            recommended size reflects how *this garment* actually runs.
 
     Returns a dict with:
       - size: the best-fit label (e.g. "M", "L", "10-11Y")
       - size_numeric: numeric equivalent where applicable
       - details: per-measurement size breakdown
+      - chart_source: "product" or "generic"
     """
-    chart = _pick_chart(gender, body_model)
+    chart_source = "generic"
+    if size_chart:
+        chart = size_chart
+        chart_source = "product"
+    else:
+        chart = _pick_chart(gender, body_model)
 
     chest = _get_cm(measurements, "chest_circumference", "bust_circumference")
     waist = _get_cm(measurements, "waist_circumference")
@@ -82,7 +172,7 @@ def calculate_size(
 
     if not any([chest, waist, hip]):
         logger.warning("No circumference measurements found for size calculation")
-        return {"size": None, "size_numeric": None, "details": {}}
+        return {"size": None, "size_numeric": None, "details": {}, "chart_source": chart_source}
 
     # For each measurement, find the matching size
     per_key = {}
@@ -103,13 +193,17 @@ def calculate_size(
 
     best_size = chart[max_idx][0]
 
-    # Numeric size mapping (EU-style for pants)
-    numeric = _to_numeric(best_size, gender, body_model, waist)
+    # Numeric size mapping (EU-style for pants). Only meaningful for the
+    # generic letter charts — skip for a product's bespoke chart.
+    numeric = None if chart_source == "product" else _to_numeric(
+        best_size, gender, body_model, waist
+    )
 
     return {
         "size": best_size,
         "size_numeric": numeric,
         "details": per_key,
+        "chart_source": chart_source,
     }
 
 
@@ -253,5 +347,33 @@ def recommend_from_available(
         "recommended_size": available_sizes[len(available_sizes) // 2],
         "calculated_size": ideal,
         "confidence": "low",
+        "details": calc.get("details", {}),
+    }
+
+
+def recommend_size_for_product(
+    measurements: dict,
+    product: dict,
+    gender: str = "male",
+    body_model: str = "adult",
+    fallback_size: str = "",
+) -> dict:
+    """Best size for a *specific* product, preferring its own size chart.
+
+    Uses the garment's bespoke chart when the CMS provides one (most accurate);
+    otherwise falls back to the generic gender/body-model chart, and finally to
+    ``fallback_size`` (e.g. a previously computed generic size).
+
+    Returns {size, chart_source, details}. ``size`` may be None if nothing could
+    be determined and no fallback was supplied.
+    """
+    chart = extract_size_chart(product)
+    calc = calculate_size(
+        measurements, gender=gender, body_model=body_model, size_chart=chart
+    )
+    size = calc.get("size") or (fallback_size or None)
+    return {
+        "size": size,
+        "chart_source": calc.get("chart_source", "generic" if chart is None else "product"),
         "details": calc.get("details", {}),
     }

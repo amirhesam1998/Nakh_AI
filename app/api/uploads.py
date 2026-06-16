@@ -16,6 +16,8 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.core.dependencies import CurrentUser
+from app.services import upload_store
+from app.services import events
 from app.schemas import (
     PhotoUploadListResponse,
     PhotoUploadResponse,
@@ -32,66 +34,106 @@ class QuestionnaireRequest(BaseModel):
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Single-worker executor — PARE is GPU-heavy, serialized queue prevents OOM
-_processing_executor = ThreadPoolExecutor(max_workers=1)
+# PARE is GPU-heavy: a small worker pool acts as a serialized queue that
+# prevents OOM. Worker count is configurable (keep at 1 for a single GPU).
+import threading
+from app.services.metrics import metrics
+
+_processing_executor = ThreadPoolExecutor(
+    max_workers=max(1, int(getattr(settings, "pare_max_workers", 1)))
+)
+# Track queued/in-flight jobs so we can shed load instead of unboundedly
+# queueing work that will time out anyway.
+_inflight_lock = threading.Lock()
+_inflight_jobs = 0
+
+
+class ProcessingQueueFull(Exception):
+    """Raised when too many PARE jobs are already queued/running."""
 
 # Directory for upload metadata JSON files
 METADATA_DIR = settings.media_path / "metadata"
 
-
-def _ensure_metadata_dir() -> Path:
-    METADATA_DIR.mkdir(parents=True, exist_ok=True)
-    return METADATA_DIR
+# Metadata access is delegated to the indexed upload_store so listing a user's
+# uploads no longer scans every file on disk. These thin wrappers preserve the
+# historical names imported elsewhere (e.g. app.tasks.processing).
 
 
 def _save_metadata(upload_id: str, data: dict) -> None:
-    _ensure_metadata_dir()
-    target = METADATA_DIR / f"{upload_id}.json"
-    tmp = METADATA_DIR / f"{upload_id}.json.tmp"
-    tmp.write_text(json.dumps(data), encoding="utf-8")
-    tmp.replace(target)
+    upload_store.save_metadata(upload_id, data)
 
 
 def _load_metadata(upload_id: str) -> Optional[dict]:
-    path = METADATA_DIR / f"{upload_id}.json"
-    if not path.exists():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    return upload_store.load_metadata(upload_id)
 
 
 def _delete_metadata(upload_id: str) -> None:
-    path = METADATA_DIR / f"{upload_id}.json"
-    if path.exists():
-        path.unlink()
+    upload_store.delete_metadata(upload_id)
 
 
 def _list_user_metadata(user_id: str) -> List[dict]:
-    _ensure_metadata_dir()
-    uploads = []
-    for path in METADATA_DIR.glob("*.json"):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if str(data.get("user_id")) == str(user_id):
-                uploads.append(data)
-        except Exception:
-            continue
-    uploads.sort(key=lambda u: u.get("uploaded_at", ""), reverse=True)
-    return uploads
+    return upload_store.list_user_metadata(user_id)
 
 
 def _run_processing_in_background(upload_id: str, height_cm: float, weight_kg: float, gender: str, age: int = 25) -> None:
-    """Submit PARE processing to the background thread pool."""
+    """Submit PARE processing to the bounded background thread pool.
+
+    Raises ProcessingQueueFull when the queue depth limit is exceeded so the
+    caller can return 503 instead of silently queueing doomed work.
+    """
+    global _inflight_jobs
     from app.tasks.processing import _process_upload_pare_impl
+
+    max_depth = int(getattr(settings, "pare_max_queue_depth", 20))
+    with _inflight_lock:
+        if _inflight_jobs >= max_depth:
+            metrics.incr("pare.rejected_queue_full")
+            raise ProcessingQueueFull(
+                f"PARE queue full ({_inflight_jobs}/{max_depth})"
+            )
+        _inflight_jobs += 1
+        metrics.observe("pare.queue_depth", _inflight_jobs)
 
     class _MockTask:
         def retry(self, *args, **kwargs):
             raise kwargs.get("exc", Exception("Task retry"))
 
     def _worker():
+        global _inflight_jobs
+        metrics.incr("pare.total")
         try:
-            _process_upload_pare_impl(_MockTask(), upload_id, height_cm, weight_kg, gender, age=age)
+            with metrics.timer("pare.duration_seconds"):
+                result = _process_upload_pare_impl(
+                    _MockTask(), upload_id, height_cm, weight_kg, gender, age=age
+                )
+            status_val = (result or {}).get("status", "")
+            if status_val == "completed":
+                metrics.incr("pare.success")
+            else:
+                metrics.incr("pare.completed_with_errors")
+            # Record measurement-confidence distribution for observability.
+            try:
+                for _k, conf in ((result or {}).get("confidences") or {}).items():
+                    metrics.observe("pare.confidence", float(conf))
+            except Exception:
+                pass
+            # Behavioural event: a measurement completed (flywheel seed).
+            try:
+                from app.services import events
+                events.record(
+                    events.EVENT_MEASUREMENT_COMPLETED,
+                    upload_id=upload_id,
+                    status=status_val,
+                    body_model=(result or {}).get("body_model"),
+                )
+            except Exception:
+                pass
         except Exception:
+            metrics.incr("pare.failed")
             logger.exception(f"Background processing failed for upload {upload_id}")
+        finally:
+            with _inflight_lock:
+                _inflight_jobs -= 1
 
     _processing_executor.submit(_worker)
     logger.info(f"Submitted background processing for upload {upload_id}")
@@ -388,13 +430,19 @@ async def create_upload(
     logger.info(f"Upload created: id={upload_id}, user={current_user['username']}")
 
     if can_auto_process:
-        _run_processing_in_background(
-            upload_id,
-            float(height_cm),
-            float(weight_kg),
-            gender.value,
-            int(age),
-        )
+        try:
+            _run_processing_in_background(
+                upload_id,
+                float(height_cm),
+                float(weight_kg),
+                gender.value,
+                int(age),
+            )
+        except ProcessingQueueFull:
+            # Don't fail the upload — just defer. User can retry via /process.
+            logger.warning("PARE queue full; deferring auto-process for %s", upload_id)
+            upload_data["processing_status"] = "queued_deferred"
+            _save_metadata(upload_id, upload_data)
     elif image1_path and image2_path and image3_path and image4_path:
         logger.info(
             f"Upload {upload_id}: 4 images present but height/weight/age missing; "
@@ -523,7 +571,15 @@ async def trigger_processing(
         upload["processing_status"] = "processing"
         _save_metadata(upload_id, upload)
 
-        _run_processing_in_background(upload_id, height_cm, weight_kg, gender, int(age))
+        try:
+            _run_processing_in_background(upload_id, height_cm, weight_kg, gender, int(age))
+        except ProcessingQueueFull:
+            upload["processing_status"] = "queued_deferred"
+            _save_metadata(upload_id, upload)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Processing queue is full. Please try again shortly.",
+            )
         logger.info(f"Processing started in background: upload_id={upload_id}")
 
         return ProcessingTriggerResponse(

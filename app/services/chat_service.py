@@ -397,6 +397,73 @@ class ChatService:
 
         return user_msg, assistant_msg, recommendations
 
+    async def stream_message(
+        self,
+        user_id: str,
+        message: str,
+        session_id: Optional[str] = None,
+        measurements: Optional[dict] = None,
+        preferences: Optional[UserPreferences] = None,
+    ):
+        """Stream an assistant reply token-by-token (async generator of str).
+
+        Persists the user message before streaming and the full assistant
+        message after the stream completes. Yields a leading marker dict via
+        the first item containing the session id, then plain text deltas.
+        """
+        from app.services.concurrency import llm_slot
+        from app.services.metrics import metrics
+        from starlette.concurrency import iterate_in_threadpool
+
+        session = await self.get_or_create_session(user_id, session_id)
+        self.context_builder.language = session.preferred_language
+
+        safe_message = _sanitize_user_message(message)
+        user_msg = ChatMessage(
+            role=MessageRole.USER, content=safe_message, timestamp=datetime.utcnow(),
+        )
+        await self._store_message(session.session_id, user_msg)
+
+        history = await self._get_messages(session.session_id, limit=10)
+        system_prompt = self.context_builder.build_system_prompt(
+            measurements=measurements if session.include_measurements else None,
+            preferences=preferences,
+            include_product_context=True,
+        )
+        chat_messages = self.context_builder.format_chat_history(history)
+
+        # First item: session id so the client can correlate.
+        yield {"session_id": session.session_id}
+
+        full_text = ""
+        if llm_manager.is_ready and llm_manager.supports_streaming:
+            try:
+                async with llm_slot("chat"):
+                    with metrics.timer("chat.llm_seconds"):
+                        sync_gen = llm_manager.chat_stream(
+                            messages=chat_messages,
+                            system_prompt=system_prompt,
+                            max_new_tokens=512,
+                            temperature=0.7,
+                        )
+                        async for delta in iterate_in_threadpool(sync_gen):
+                            full_text += delta
+                            yield delta
+            except Exception as e:
+                logger.error("Chat streaming error: %s", e)
+        if not full_text:
+            # Fallback (no LLM / streaming unsupported): non-streamed reply.
+            full_text = await self._generate_response(
+                chat_messages, system_prompt, session.preferred_language
+            )
+            yield full_text
+
+        assistant_msg = ChatMessage(
+            role=MessageRole.ASSISTANT, content=full_text, timestamp=datetime.utcnow(),
+        )
+        await self._store_message(session.session_id, assistant_msg)
+        await self._update_session_count(session.session_id)
+
     async def _generate_response(
         self, messages: list[dict], system_prompt: str, language: str
     ) -> str:
@@ -413,14 +480,20 @@ class ChatService:
 
         try:
             # llm_manager.chat() is synchronous (blocking httpx to Ollama).
-            # Run in thread to avoid blocking the async event loop.
-            response = await asyncio.to_thread(
-                llm_manager.chat,
-                messages=messages,
-                system_prompt=system_prompt,
-                max_new_tokens=512,
-                temperature=0.7,
-            )
+            # Run in thread + bound by the shared concurrency semaphore so a
+            # spike of chat traffic can't exhaust the event-loop thread pool.
+            from app.services.concurrency import llm_slot
+            from app.services.metrics import metrics
+
+            async with llm_slot("chat"):
+                with metrics.timer("chat.llm_seconds"):
+                    response = await asyncio.to_thread(
+                        llm_manager.chat,
+                        messages=messages,
+                        system_prompt=system_prompt,
+                        max_new_tokens=512,
+                        temperature=0.7,
+                    )
             return response.text
         except Exception as e:
             logger.error(f"LLM generation error: {e}")
