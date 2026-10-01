@@ -96,7 +96,7 @@ $(function () {
             if (response.result && response.result.token) {
               localStorage.setItem("auth_token", response.result.token);
             }
-            const redirectUrl = response.redirect || "/upload.html";
+            const redirectUrl = response.redirect || "./upload.html";
             logindiv.css("display", "none");
             window.location.href = redirectUrl;
           } else {

@@ -439,7 +439,8 @@ Three interchangeable backends behind a unified `BaseLLMProvider` interface:
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.11
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - Redis 7+
 - Ollama (for LLM features)
 - PARE model checkpoints
@@ -448,11 +449,9 @@ Three interchangeable backends behind a unified `BaseLLMProvider` interface:
 ### Local Development
 
 ```bash
-# Clone and setup
+# Clone and set up the locked environment
 cd Nakh_AI
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+uv sync
 
 # Configure
 cp .env.example .env
@@ -466,10 +465,10 @@ ollama serve  # In separate terminal
 ollama pull gemma2:9b
 
 # Run the application
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 # (Optional) Celery worker for background processing
-celery -A app.tasks.processing worker --loglevel=info --concurrency=1
+uv run celery -A app.tasks.processing worker --loglevel=info --concurrency=1
 ```
 
 ### PARE Model Setup
